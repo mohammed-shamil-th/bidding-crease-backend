@@ -81,9 +81,9 @@ const createTournament = async (req, res) => {
       totalPlayers,
       status
     } = req.body;
-    
-    // Get logo from file upload if available
-    const logo = req.file ? req.file.path : req.body.logo || '';
+
+    // Get logo from file upload if available, otherwise use empty string
+    const logo = req.file ? req.file.path : '';
 
     // Validate required fields
     if (!name || !category || !location || !auctionDate || !tournamentDate ||
@@ -193,12 +193,14 @@ const updateTournament = async (req, res) => {
       totalPlayers,
       status
     } = req.body;
-    
-    // Get logo from file upload if available
-    const logo = req.file ? req.file.path : req.body.logo;
 
     if (name) tournament.name = name;
-    if (logo !== undefined) tournament.logo = logo;
+    // Update logo if new file uploaded
+    if (req.file) {
+      tournament.logo = req.file.path;
+    } else if (req.body.logo !== undefined) {
+      tournament.logo = req.body.logo;
+    }
     if (category) {
       if (!['open', 'private'].includes(category)) {
         return res.status(400).json({

@@ -228,42 +228,118 @@ const updatePlayer = async (req, res) => {
       });
     }
 
-    // Allow updating sold player details (soldPrice and soldTo) if explicitly provided
-    const { soldPrice, soldTo } = req.body;
-    const isUpdatingSoldDetails = soldPrice !== undefined || soldTo !== undefined;
+    const Team = require('../models/Team');
+    // Store old values before updating (for team updates)
+    const oldSoldPrice = player.soldPrice;
+    const oldSoldTo = player.soldTo;
+
+    // Extract all fields from request body
+    const {
+      name,
+      mobile,
+      role,
+      battingStyle,
+      bowlingStyle,
+      category,
+      basePrice,
+      tournamentId,
+      soldPrice,
+      soldTo
+    } = req.body;
+
+    // Update basic player fields
+    if (name !== undefined) player.name = name;
+    if (mobile !== undefined) {
+      if (mobile && !isValidMobile(mobile)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please provide a valid mobile number'
+        });
+      }
+      player.mobile = mobile;
+    }
+    if (role !== undefined) {
+      if (role && !['Batter', 'Bowler', 'All-Rounder'].includes(role)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Role must be "Batter", "Bowler", or "All-Rounder"'
+        });
+      }
+      player.role = role;
+    }
+    if (battingStyle !== undefined) player.battingStyle = battingStyle || null;
+    if (bowlingStyle !== undefined) player.bowlingStyle = bowlingStyle || null;
+    if (category !== undefined) {
+      if (category && !['Icon', 'Guest', 'Local'].includes(category)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Category must be "Icon", "Guest", or "Local"'
+        });
+      }
+      player.category = category;
+    }
+    if (basePrice !== undefined) {
+      player.basePrice = parseFloat(basePrice) || 0;
+    }
     
-    // If updating sold details, allow it even if player is sold
-    if (isUpdatingSoldDetails) {
-      const Team = require('../models/Team');
-      // Store old values before updating
-      const oldSoldPrice = player.soldPrice;
-      const oldSoldTo = player.soldTo;
+    // Update tournamentId if provided
+    if (tournamentId !== undefined) {
+      // Check if tournament is actually being changed
+      const currentTournamentId = player.tournamentId?.toString() || player.tournamentId;
+      const newTournamentId = tournamentId?.toString() || tournamentId;
+      const isTournamentChanging = currentTournamentId !== newTournamentId;
       
-      if (soldPrice !== undefined) {
-        if (soldPrice === '' || soldPrice === null) {
-          player.soldPrice = null;
-        } else {
-          player.soldPrice = parseFloat(soldPrice);
-        }
+      // Only prevent tournament change if player is sold AND tournament is actually changing
+      if (isTournamentChanging && player.soldPrice !== null && player.soldTo !== null) {
+        return res.status(400).json({
+          success: false,
+          message: 'Cannot change tournament for a sold player'
+        });
       }
-      if (soldTo !== undefined) {
-        if (soldTo === '' || soldTo === null) {
-          player.soldTo = null;
-        } else {
-          if (!isValidObjectId(soldTo)) {
-            return res.status(400).json({
-              success: false,
-              message: 'Invalid team ID'
-            });
-          }
-          player.soldTo = soldTo;
-        }
+      if (tournamentId && !isValidObjectId(tournamentId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid tournament ID'
+        });
       }
-      
-      // Save player first so the updated soldPrice is in the database
-      await player.save();
-      
-      // Now update teams with the new player data
+      // Only update if tournament is actually changing
+      if (isTournamentChanging) {
+        player.tournamentId = tournamentId || player.tournamentId;
+      }
+    }
+
+    // Update sold details if provided
+    if (soldPrice !== undefined) {
+      if (soldPrice === '' || soldPrice === null) {
+        player.soldPrice = null;
+      } else {
+        player.soldPrice = parseFloat(soldPrice);
+      }
+    }
+    if (soldTo !== undefined) {
+      if (soldTo === '' || soldTo === null) {
+        player.soldTo = null;
+      } else {
+        if (!isValidObjectId(soldTo)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid team ID'
+          });
+        }
+        player.soldTo = soldTo;
+      }
+    }
+
+    // Update image if new file uploaded
+    if (req.file) {
+      player.image = req.file.path;
+    }
+
+    // Save player first
+    await player.save();
+
+    // Update team relationships if sold details changed
+    if (soldPrice !== undefined || soldTo !== undefined) {
       // If both are null, player becomes unsold - need to remove from team
       if (player.soldPrice === null && player.soldTo === null) {
         // Remove player from old team's players array
@@ -300,7 +376,6 @@ const updatePlayer = async (req, res) => {
             await targetTeam.save(); // Save before recalculating
           }
           // Always recalculate remaining amount (handles price changes and team changes)
-          // This will query the database for the updated player soldPrice
           await targetTeam.updateRemainingAmount();
         }
       } else if (oldSoldTo && (player.soldPrice === null || player.soldTo === null)) {
@@ -313,77 +388,17 @@ const updatePlayer = async (req, res) => {
           await oldTeam.updateRemainingAmount();
         }
       }
-      const updatedPlayer = await Player.findById(id)
-        .populate('soldTo', 'name logo')
-        .populate('tournamentId', 'name');
-      return res.status(200).json({
-        success: true,
-        message: 'Sold player details updated successfully',
-        data: updatedPlayer
-      });
-    }
-    
-    // Don't allow updating other fields for sold players
-    if (player.soldPrice !== null && player.soldTo !== null) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot update a sold player. Use sold details update instead.'
-      });
     }
 
-    const {
-      name,
-      mobile,
-      role,
-      battingStyle,
-      bowlingStyle,
-      category,
-      basePrice
-    } = req.body;
-
-    if (name) player.name = name;
-    if (mobile) {
-      if (!isValidMobile(mobile)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Please provide a valid mobile number'
-        });
-      }
-      player.mobile = mobile;
-    }
-    if (role) {
-      if (!['Batter', 'Bowler', 'All-Rounder'].includes(role)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Role must be "Batter", "Bowler", or "All-Rounder"'
-        });
-      }
-      player.role = role;
-    }
-    if (battingStyle !== undefined) player.battingStyle = battingStyle || null;
-    if (bowlingStyle !== undefined) player.bowlingStyle = bowlingStyle || null;
-    if (category) {
-      if (!['Icon', 'Guest', 'Local'].includes(category)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Category must be "Icon", "Guest", or "Local"'
-        });
-      }
-      player.category = category;
-    }
-    if (basePrice !== undefined) player.basePrice = basePrice;
-
-    // Update image if new file uploaded
-    if (req.file) {
-      player.image = req.file.path;
-    }
-
-    await player.save();
+    // Fetch updated player with populated fields
+    const updatedPlayer = await Player.findById(id)
+      .populate('soldTo', 'name logo')
+      .populate('tournamentId', 'name');
 
     res.status(200).json({
       success: true,
       message: 'Player updated successfully',
-      data: player
+      data: updatedPlayer
     });
   } catch (error) {
     console.error('Update player error:', error);

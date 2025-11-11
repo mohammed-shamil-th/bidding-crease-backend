@@ -79,12 +79,14 @@ const createTeam = async (req, res) => {
   try {
     const {
       name,
-      logo,
       owner,
       mobile,
       budget,
       tournamentId
     } = req.body;
+
+    // Get logo from file upload if available
+    const logo = req.file ? req.file.path : req.body.logo || '';
 
     // Validate required fields
     if (!name || !owner || !mobile || !tournamentId) {
@@ -120,12 +122,9 @@ const createTeam = async (req, res) => {
     // Use tournament teamBudget if budget not provided
     const teamBudget = budget !== undefined ? budget : tournament.teamBudget;
 
-    // Get logo from file upload if available
-    const logoUrl = req.file ? req.file.path : logo || '';
-    
     const team = new Team({
       name,
-      logo: logoUrl,
+      logo: logo || '',
       owner,
       mobile,
       budget: teamBudget,
@@ -171,12 +170,14 @@ const updateTeam = async (req, res) => {
     }
 
     const { name, owner, mobile, budget } = req.body;
-    
-    // Get logo from file upload if available
-    const logo = req.file ? req.file.path : req.body.logo;
 
     if (name) team.name = name;
-    if (logo !== undefined) team.logo = logo;
+    // Update logo if new file uploaded
+    if (req.file) {
+      team.logo = req.file.path;
+    } else if (req.body.logo !== undefined) {
+      team.logo = req.body.logo;
+    }
     if (owner) team.owner = owner;
     if (mobile) {
       if (!isValidMobile(mobile)) {
