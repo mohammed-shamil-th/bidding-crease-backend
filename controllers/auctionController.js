@@ -768,10 +768,16 @@ const markUnsold = async (req, res) => {
   }
 };
 
+// Export function to get current auction state (for Socket.IO)
+const getCurrentAuctionState = () => {
+  return currentAuctionState;
+};
+
 module.exports = {
   getCurrentAuction,
   getUnsoldPlayers,
   getMaxBidsForTeams,
+  getCurrentAuctionState,
   startAuction,
   shufflePlayer,
   selectPlayer,

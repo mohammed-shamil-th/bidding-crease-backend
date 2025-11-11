@@ -25,8 +25,13 @@ const io = socketIo(server, {
   cors: {
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
     methods: ['GET', 'POST'],
-    credentials: true
-  }
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization']
+  },
+  // Allow both polling and websocket transports
+  transports: ['websocket', 'polling'],
+  // Enable CORS for Socket.IO
+  allowEIO3: true
 });
 
 // Make io available to routes
@@ -64,8 +69,31 @@ io.on('connection', (socket) => {
     console.log(`Socket ${socket.id} joined auction:${tournamentId}`);
     
     // Send current auction state to the newly joined client
-    // Note: This requires importing the auction controller's state
-    // For now, clients will fetch current state on mount
+    try {
+      const { getCurrentAuctionState } = require('./controllers/auctionController');
+      const auctionState = getCurrentAuctionState();
+      
+      // Only send if the auction is for this tournament and is active
+      if (auctionState && auctionState.tournamentId === tournamentId && auctionState.isActive) {
+        const Player = require('./models/Player');
+        const currentPlayer = await Player.findById(auctionState.currentPlayerId)
+          .populate('soldTo', 'name logo');
+        
+        if (currentPlayer) {
+          // Emit current auction state to this socket only
+          socket.emit('player:selected', {
+            player: currentPlayer,
+            currentBidPrice: auctionState.currentBidPrice || currentPlayer.basePrice,
+          });
+          socket.emit('auction:started', {
+            isActive: auctionState.isActive,
+          });
+          console.log(`Sent current auction state to socket ${socket.id} for tournament ${tournamentId}`);
+        }
+      }
+    } catch (error) {
+      console.error('Error sending current auction state:', error);
+    }
   });
 
   // Leave auction room
