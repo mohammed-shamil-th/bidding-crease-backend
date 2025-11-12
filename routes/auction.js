@@ -10,7 +10,8 @@ const {
   selectPlayer,
   placeBid,
   sellPlayer,
-  markUnsold
+  markUnsold,
+  cancelCurrentPlayer
 } = require('../controllers/auctionController');
 const { authenticateAdmin } = require('../middleware/auth');
 
@@ -26,6 +27,7 @@ router.post('/select-player', authenticateAdmin, selectPlayer);
 router.post('/bid', authenticateAdmin, placeBid);
 router.post('/sell', authenticateAdmin, sellPlayer);
 router.post('/mark-unsold', authenticateAdmin, markUnsold);
+router.post('/cancel-player', authenticateAdmin, cancelCurrentPlayer);
 
 module.exports = router;
 

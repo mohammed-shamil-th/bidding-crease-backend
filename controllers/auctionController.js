@@ -768,6 +768,86 @@ const markUnsold = async (req, res) => {
   }
 };
 
+// Cancel current player (reset wasAuctioned flag and clear auction state)
+const cancelCurrentPlayer = async (req, res) => {
+  try {
+    const { tournamentId } = req.body;
+
+    if (!tournamentId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tournament ID is required'
+      });
+    }
+
+    if (!isValidObjectId(tournamentId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid tournament ID'
+      });
+    }
+
+    // Check if auction is active
+    if (!currentAuctionState.isActive || currentAuctionState.tournamentId !== tournamentId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Auction is not active'
+      });
+    }
+
+    // Get current player
+    const currentPlayer = await Player.findById(currentAuctionState.currentPlayerId);
+    if (!currentPlayer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Current player not found'
+      });
+    }
+
+    // Check if player is already sold
+    if (currentPlayer.soldPrice !== null && currentPlayer.soldTo !== null) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot cancel a sold player'
+      });
+    }
+
+    // Reset wasAuctioned flag to false
+    currentPlayer.wasAuctioned = false;
+    await currentPlayer.save();
+
+    // Clear auction state
+    currentAuctionState = {
+      currentPlayerId: null,
+      currentBidPrice: null,
+      tournamentId: null,
+      isActive: false
+    };
+
+    // Broadcast via Socket.IO
+    const io = req.app.get('io');
+    io.to(`auction:${tournamentId}`).emit('auction:cancelled', {
+      tournamentId,
+      playerId: currentPlayer._id.toString()
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Player cancelled successfully',
+      data: {
+        playerId: currentPlayer._id.toString()
+      }
+    });
+  } catch (error) {
+    console.error('Cancel player error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error cancelling player',
+      error: error.message
+    });
+  }
+};
+
 // Export function to get current auction state (for Socket.IO)
 const getCurrentAuctionState = () => {
   return currentAuctionState;
@@ -783,6 +863,7 @@ module.exports = {
   selectPlayer,
   placeBid,
   sellPlayer,
-  markUnsold
+  markUnsold,
+  cancelCurrentPlayer
 };
 
