@@ -15,6 +15,16 @@ const getAllTournaments = async (req, res) => {
       .skip(skip)
       .limit(limit);
 
+    // Update status for each tournament based on dates
+    for (const tournament of tournaments) {
+      const oldStatus = tournament.status;
+      tournament.updateStatus();
+      // Only save if status changed to avoid unnecessary database writes
+      if (oldStatus !== tournament.status) {
+        await tournament.save();
+      }
+    }
+
     res.status(200).json({
       success: true,
       count: tournaments.length,
@@ -50,6 +60,13 @@ const getTournament = async (req, res) => {
         success: false,
         message: 'Tournament not found'
       });
+    }
+
+    // Update status based on dates
+    const oldStatus = tournament.status;
+    tournament.updateStatus();
+    if (oldStatus !== tournament.status) {
+      await tournament.save();
     }
 
     res.status(200).json({

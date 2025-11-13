@@ -64,6 +64,55 @@ const tournamentSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Virtual to calculate status based on dates
+tournamentSchema.virtual('calculatedStatus').get(function() {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const auctionDate = new Date(this.auctionDate);
+  const auctionDay = new Date(auctionDate.getFullYear(), auctionDate.getMonth(), auctionDate.getDate());
+  const tournamentDate = new Date(this.tournamentDate);
+  const tournamentDay = new Date(tournamentDate.getFullYear(), tournamentDate.getMonth(), tournamentDate.getDate());
+
+  // If tournament has ended
+  if (tournamentDay < today) {
+    return 'completed';
+  }
+  
+  // If auction is today or has passed (but tournament hasn't ended)
+  if (auctionDay <= today) {
+    return 'ongoing';
+  }
+  
+  // If auction is in the future
+  return 'upcoming';
+});
+
+// Method to update status based on dates
+tournamentSchema.methods.updateStatus = function() {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const auctionDate = new Date(this.auctionDate);
+  const auctionDay = new Date(auctionDate.getFullYear(), auctionDate.getMonth(), auctionDate.getDate());
+  const tournamentDate = new Date(this.tournamentDate);
+  const tournamentDay = new Date(tournamentDate.getFullYear(), tournamentDate.getMonth(), tournamentDate.getDate());
+
+  if (tournamentDay < today) {
+    this.status = 'completed';
+  } else if (auctionDay <= today) {
+    this.status = 'ongoing';
+  } else {
+    this.status = 'upcoming';
+  }
+};
+
+// Pre-save hook to automatically update status
+tournamentSchema.pre('save', function(next) {
+  if (this.isModified('auctionDate') || this.isModified('tournamentDate') || this.isNew) {
+    this.updateStatus();
+  }
+  next();
+});
+
 // Index for faster queries
 tournamentSchema.index({ status: 1 });
 

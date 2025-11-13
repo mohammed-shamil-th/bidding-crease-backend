@@ -16,6 +16,10 @@ const playerSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  location: {
+    type: String,
+    default: ''
+  },
   role: {
     type: String,
     enum: ['Batter', 'Bowler', 'All-Rounder'],
@@ -41,7 +45,7 @@ const playerSchema = new mongoose.Schema({
   },
   category: {
     type: String,
-    enum: ['Icon', 'Guest', 'Local'],
+    enum: ['Icon', 'Regular'],
     required: true
   },
   basePrice: {

@@ -6,7 +6,7 @@ const { isValidObjectId, isValidMobile } = require('../utils/validators');
 // Get all players
 const getAllPlayers = async (req, res) => {
   try {
-    const { tournamentId, sold, unsold, category, sortBy = 'createdAt', sortOrder = 'desc', search } = req.query;
+    const { tournamentId, sold, unsold, category, sortBy = 'createdAt', sortOrder = 'desc', search, wasAuctioned } = req.query;
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
@@ -29,8 +29,15 @@ const getAllPlayers = async (req, res) => {
     }
     
     // Filter by category
-    if (category && ['Icon', 'Guest', 'Local'].includes(category)) {
+    if (category && ['Icon', 'Regular'].includes(category)) {
       query.category = category;
+    }
+    
+    // Filter by wasAuctioned status
+    if (wasAuctioned === 'true') {
+      query.wasAuctioned = true;
+    } else if (wasAuctioned === 'false') {
+      query.wasAuctioned = false;
     }
     
     // Filter by sold/unsold status
@@ -121,6 +128,7 @@ const createPlayer = async (req, res) => {
     const {
       name,
       mobile,
+      location,
       role,
       battingStyle,
       bowlingStyle,
@@ -160,10 +168,10 @@ const createPlayer = async (req, res) => {
     }
 
     // Validate category
-    if (!['Icon', 'Guest', 'Local'].includes(category)) {
+    if (!['Icon', 'Regular'].includes(category)) {
       return res.status(400).json({
         success: false,
-        message: 'Category must be "Icon", "Guest", or "Local"'
+        message: 'Category must be "Icon" or "Regular"'
       });
     }
 
@@ -183,6 +191,7 @@ const createPlayer = async (req, res) => {
       image,
       name,
       mobile,
+      location,
       role,
       battingStyle: battingStyle || null,
       bowlingStyle: bowlingStyle || null,
@@ -237,6 +246,7 @@ const updatePlayer = async (req, res) => {
     const {
       name,
       mobile,
+      location,
       role,
       battingStyle,
       bowlingStyle,
@@ -258,6 +268,7 @@ const updatePlayer = async (req, res) => {
       }
       player.mobile = mobile;
     }
+    if (location !== undefined) player.location = location;
     if (role !== undefined) {
       if (role && !['Batter', 'Bowler', 'All-Rounder'].includes(role)) {
         return res.status(400).json({
@@ -270,10 +281,10 @@ const updatePlayer = async (req, res) => {
     if (battingStyle !== undefined) player.battingStyle = battingStyle || null;
     if (bowlingStyle !== undefined) player.bowlingStyle = bowlingStyle || null;
     if (category !== undefined) {
-      if (category && !['Icon', 'Guest', 'Local'].includes(category)) {
+      if (category && !['Icon', 'Regular'].includes(category)) {
         return res.status(400).json({
           success: false,
-          message: 'Category must be "Icon", "Guest", or "Local"'
+          message: 'Category must be "Icon" or "Regular"'
         });
       }
       player.category = category;
