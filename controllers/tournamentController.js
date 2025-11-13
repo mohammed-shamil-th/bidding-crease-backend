@@ -144,8 +144,16 @@ const createTournament = async (req, res) => {
     }
     // Note: minPlayers can be equal to maxPlayers
 
+    // Capitalize each word in the name
+    const capitalizeWords = (str) => {
+      if (!str) return str;
+      return str.trim().split(/\s+/).map(word => 
+        word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+      ).join(' ');
+    };
+
     const tournament = new Tournament({
-      name,
+      name: capitalizeWords(name),
       logo: logo || '',
       category,
       location,
@@ -211,7 +219,16 @@ const updateTournament = async (req, res) => {
       status
     } = req.body;
 
-    if (name) tournament.name = name;
+    if (name) {
+      // Capitalize each word in the name
+      const capitalizeWords = (str) => {
+        if (!str) return str;
+        return str.trim().split(/\s+/).map(word => 
+          word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+        ).join(' ');
+      };
+      tournament.name = capitalizeWords(name);
+    }
     // Update logo if new file uploaded
     if (req.file) {
       tournament.logo = req.file.path;

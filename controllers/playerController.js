@@ -187,9 +187,17 @@ const createPlayer = async (req, res) => {
     // Get image URL from Cloudinary upload (if uploaded)
     const image = req.file ? req.file.path : '';
 
+    // Capitalize each word in the name
+    const capitalizeWords = (str) => {
+      if (!str) return str;
+      return str.trim().split(/\s+/).map(word => 
+        word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+      ).join(' ');
+    };
+
     const player = new Player({
       image,
-      name,
+      name: capitalizeWords(name),
       mobile,
       location,
       role,
@@ -258,7 +266,16 @@ const updatePlayer = async (req, res) => {
     } = req.body;
 
     // Update basic player fields
-    if (name !== undefined) player.name = name;
+    if (name !== undefined) {
+      // Capitalize each word in the name
+      const capitalizeWords = (str) => {
+        if (!str) return str;
+        return str.trim().split(/\s+/).map(word => 
+          word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+        ).join(' ');
+      };
+      player.name = capitalizeWords(name);
+    }
     if (mobile !== undefined) {
       if (mobile && !isValidMobile(mobile)) {
         return res.status(400).json({
@@ -464,11 +481,155 @@ const deletePlayer = async (req, res) => {
   }
 };
 
+// Bulk create players
+const bulkCreatePlayers = async (req, res) => {
+  try {
+    const { players, tournamentId } = req.body;
+
+    // Validate required fields
+    if (!players || !Array.isArray(players) || players.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide an array of players'
+      });
+    }
+
+    if (!tournamentId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tournament ID is required'
+      });
+    }
+
+    if (!isValidObjectId(tournamentId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid tournament ID'
+      });
+    }
+
+    // Check if tournament exists
+    const tournament = await Tournament.findById(tournamentId);
+    if (!tournament) {
+      return res.status(404).json({
+        success: false,
+        message: 'Tournament not found'
+      });
+    }
+
+    // Capitalize each word in the name
+    const capitalizeWords = (str) => {
+      if (!str) return str;
+      return str.trim().split(/\s+/).map(word => 
+        word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+      ).join(' ');
+    };
+
+    const createdPlayers = [];
+    const errors = [];
+
+    // Process each player
+    for (let i = 0; i < players.length; i++) {
+      const playerData = players[i];
+      
+      try {
+        // Validate name (required)
+        if (!playerData.name || !playerData.name.trim()) {
+          errors.push({
+            index: i,
+            name: playerData.name || 'Unknown',
+            error: 'Name is required'
+          });
+          continue;
+        }
+
+        // Validate mobile if provided
+        if (playerData.mobile && !isValidMobile(playerData.mobile)) {
+          errors.push({
+            index: i,
+            name: playerData.name,
+            error: 'Invalid mobile number'
+          });
+          continue;
+        }
+
+        // Validate role if provided
+        if (playerData.role && !['Batter', 'Bowler', 'All-Rounder'].includes(playerData.role)) {
+          errors.push({
+            index: i,
+            name: playerData.name,
+            error: 'Role must be "Batter", "Bowler", or "All-Rounder"'
+          });
+          continue;
+        }
+
+        // Validate category if provided
+        if (playerData.category && !['Icon', 'Regular'].includes(playerData.category)) {
+          errors.push({
+            index: i,
+            name: playerData.name,
+            error: 'Category must be "Icon" or "Regular"'
+          });
+          continue;
+        }
+
+        // Create player with optional fields
+        const player = new Player({
+          image: '',
+          name: capitalizeWords(playerData.name.trim()),
+          mobile: playerData.mobile || `9${Math.floor(100000000 + Math.random() * 900000000)}`, // Generate random if not provided
+          location: playerData.location || '',
+          role: playerData.role || 'Batter', // Default to 'Batter' if not provided
+          battingStyle: playerData.battingStyle || null,
+          bowlingStyle: playerData.bowlingStyle || null,
+          category: playerData.category || 'Regular', // Default to 'Regular' if not provided
+          basePrice: playerData.basePrice || 0, // Default to 0 if not provided
+          tournamentId: tournamentId,
+          wasAuctioned: false
+        });
+
+        await player.save();
+        createdPlayers.push({
+          index: i,
+          name: player.name,
+          id: player._id
+        });
+      } catch (error) {
+        errors.push({
+          index: i,
+          name: playerData.name || 'Unknown',
+          error: error.message || 'Error creating player'
+        });
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      message: `Bulk upload completed. Created: ${createdPlayers.length}, Errors: ${errors.length}`,
+      data: {
+        created: createdPlayers.length,
+        errors: errors.length,
+        total: players.length,
+        createdPlayers: createdPlayers,
+        errors: errors.length > 0 ? errors : undefined
+      }
+    });
+  } catch (error) {
+    console.error('Bulk create players error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error bulk creating players',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getAllPlayers,
   getPlayer,
   createPlayer,
   updatePlayer,
-  deletePlayer
+  deletePlayer,
+  bulkCreatePlayers
 };
 

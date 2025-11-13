@@ -15,6 +15,7 @@ const teamRoutes = require('./routes/teams');
 const playerRoutes = require('./routes/players');
 const ruleRoutes = require('./routes/rules');
 const auctionRoutes = require('./routes/auction');
+const adminRoutes = require('./routes/admin');
 
 // Initialize Express app
 const app = express();
@@ -53,6 +54,7 @@ app.use('/api/teams', teamRoutes);
 app.use('/api/players', playerRoutes);
 app.use('/api/rules', ruleRoutes);
 app.use('/api/auction', auctionRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

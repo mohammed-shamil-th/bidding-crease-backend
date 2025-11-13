@@ -6,7 +6,8 @@ const {
   getPlayer,
   createPlayer,
   updatePlayer,
-  deletePlayer
+  deletePlayer,
+  bulkCreatePlayers
 } = require('../controllers/playerController');
 const { authenticateAdmin } = require('../middleware/auth');
 const upload = require('../middleware/upload');
@@ -17,6 +18,7 @@ router.get('/:id', getPlayer);
 
 // Admin only routes
 router.post('/', authenticateAdmin, upload.single('image'), createPlayer);
+router.post('/bulk', authenticateAdmin, bulkCreatePlayers);
 router.put('/:id', authenticateAdmin, upload.single('image'), updatePlayer);
 router.delete('/:id', authenticateAdmin, deletePlayer);
 

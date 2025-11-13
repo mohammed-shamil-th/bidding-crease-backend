@@ -122,8 +122,16 @@ const createTeam = async (req, res) => {
     // Use tournament teamBudget if budget not provided
     const teamBudget = budget !== undefined ? budget : tournament.teamBudget;
 
+    // Capitalize each word in the name
+    const capitalizeWords = (str) => {
+      if (!str) return str;
+      return str.trim().split(/\s+/).map(word => 
+        word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+      ).join(' ');
+    };
+
     const team = new Team({
-      name,
+      name: capitalizeWords(name),
       logo: logo || '',
       owner,
       mobile,
@@ -171,7 +179,16 @@ const updateTeam = async (req, res) => {
 
     const { name, owner, mobile, budget } = req.body;
 
-    if (name) team.name = name;
+    if (name) {
+      // Capitalize each word in the name
+      const capitalizeWords = (str) => {
+        if (!str) return str;
+        return str.trim().split(/\s+/).map(word => 
+          word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+        ).join(' ');
+      };
+      team.name = capitalizeWords(name);
+    }
     // Update logo if new file uploaded
     if (req.file) {
       team.logo = req.file.path;
