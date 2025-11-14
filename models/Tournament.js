@@ -59,6 +59,53 @@ const tournamentSchema = new mongoose.Schema({
     type: String,
     enum: ['upcoming', 'ongoing', 'completed'],
     default: 'upcoming'
+  },
+  bidIncrements: {
+    type: [{
+      minPrice: {
+        type: Number,
+        required: true,
+        min: 0
+      },
+      maxPrice: {
+        type: Number,
+        default: null // null means no upper limit (for last range)
+      },
+      increment: {
+        type: Number,
+        required: true,
+        min: 1
+      }
+    }],
+    default: [
+      { minPrice: 1, maxPrice: 1000, increment: 100 },
+      { minPrice: 1001, maxPrice: 5000, increment: 200 },
+      { minPrice: 5001, maxPrice: null, increment: 500 }
+    ]
+  },
+  categories: {
+    type: [{
+      name: {
+        type: String,
+        required: true,
+        trim: true
+      },
+      basePrice: {
+        type: Number,
+        required: true,
+        min: 0
+      },
+      minPlayers: {
+        type: Number,
+        required: true,
+        min: 0
+      },
+      icon: {
+        type: String,
+        default: ''
+      }
+    }],
+    default: []
   }
 }, {
   timestamps: true

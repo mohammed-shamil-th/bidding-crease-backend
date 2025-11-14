@@ -253,8 +253,30 @@ const shufflePlayer = async (req, res) => {
   }
 };
 
-// Calculate bid increment based on current price
-const calculateBidIncrement = (currentPrice) => {
+// Calculate bid increment based on current price and tournament
+const calculateBidIncrement = (currentPrice, tournament = null) => {
+  // Use tournament-specific increments if available
+  if (tournament && tournament.bidIncrements && tournament.bidIncrements.length > 0) {
+    // Sort by minPrice to ensure proper order
+    const sorted = [...tournament.bidIncrements].sort((a, b) => a.minPrice - b.minPrice);
+    
+    for (const increment of sorted) {
+      const minPrice = increment.minPrice;
+      const maxPrice = increment.maxPrice;
+      
+      // Check if current price falls in this range
+      if (currentPrice >= minPrice) {
+        if (maxPrice === null || maxPrice === undefined) {
+          // Last range with no upper limit
+          return increment.increment;
+        } else if (currentPrice <= maxPrice) {
+          return increment.increment;
+        }
+      }
+    }
+  }
+  
+  // Default fallback (original logic)
   if (currentPrice >= 1 && currentPrice <= 1000) {
     return 100;
   } else if (currentPrice >= 1001 && currentPrice <= 5000) {
@@ -310,8 +332,17 @@ const placeBid = async (req, res) => {
       });
     }
 
-    // Validate bid amount
-    const increment = calculateBidIncrement(currentAuctionState.currentBidPrice);
+    // Get tournament for validation and bid increment calculation
+    const tournament = await Tournament.findById(tournamentId);
+    if (!tournament) {
+      return res.status(404).json({
+        success: false,
+        message: 'Tournament not found'
+      });
+    }
+
+    // Validate bid amount using tournament-specific increments
+    const increment = calculateBidIncrement(currentAuctionState.currentBidPrice, tournament);
     const minBid = currentAuctionState.currentBidPrice + increment;
 
     if (bidAmount < minBid) {
@@ -321,22 +352,8 @@ const placeBid = async (req, res) => {
       });
     }
 
-    // Check if team has sufficient balance
-    if (team.remainingAmount < bidAmount) {
-      return res.status(400).json({
-        success: false,
-        message: 'Insufficient balance. Team does not have enough funds.'
-      });
-    }
-
-    // Get tournament for minPlayers validation
-    const tournament = await Tournament.findById(tournamentId);
-    if (!tournament) {
-      return res.status(404).json({
-        success: false,
-        message: 'Tournament not found'
-      });
-    }
+    // Allow bids even if team exceeds remaining amount (will show negative)
+    // No longer blocking bids that exceed remainingAmount
 
     // Validate team can afford minimum required players after purchase
     const currentPlayerCount = team.players.length;
@@ -455,13 +472,18 @@ const sellPlayer = async (req, res) => {
       });
     }
 
-    // Check if team has sufficient balance
-    if (team.remainingAmount < currentAuctionState.currentBidPrice) {
-      return res.status(400).json({
+    // Get tournament to check for warnings
+    const tournament = await Tournament.findById(tournamentId);
+    if (!tournament) {
+      return res.status(404).json({
         success: false,
-        message: 'Insufficient balance'
+        message: 'Tournament not found'
       });
     }
+
+    // Allow sale even if team exceeds remaining amount (will show negative)
+    const exceedsLimit = team.remainingAmount < currentAuctionState.currentBidPrice;
+    const excessAmount = exceedsLimit ? currentAuctionState.currentBidPrice - team.remainingAmount : 0;
 
     // Update player
     currentPlayer.soldPrice = currentAuctionState.currentBidPrice;
@@ -512,7 +534,8 @@ const sellPlayer = async (req, res) => {
           name: updatedTeam.name,
           remainingAmount: updatedTeam.remainingAmount,
           playerCount: updatedTeam.players.length
-        }
+        },
+        warning: exceedsLimit ? `Team exceeded budget limit by ${excessAmount}. Fine will be calculated externally.` : null
       }
     });
   } catch (error) {
@@ -554,43 +577,81 @@ const getMaxBidsForTeams = async (req, res) => {
     }
 
     // Get all teams for this tournament
-    const teams = await Team.find({ tournamentId });
+    const teams = await Team.find({ tournamentId }).populate('players');
 
-    // Get minimum base price from unsold players
-    const unsoldPlayers = await Player.find({
-      tournamentId,
-      $or: [
-        { soldPrice: null },
-        { soldTo: null }
-      ]
-    });
+    // Get all players for this tournament to check categories
+    const allPlayers = await Player.find({ tournamentId });
 
-    const minBasePrice = unsoldPlayers.length > 0
-      ? Math.min(...unsoldPlayers.map(p => p.basePrice))
-      : 0;
+    // Calculate max bid for each team based on category quotas
+    const maxBids = await Promise.all(teams.map(async (team) => {
+      // Get players already purchased by this team
+      const purchasedPlayers = await Player.find({
+        _id: { $in: team.players },
+        soldPrice: { $ne: null },
+        soldTo: { $ne: null }
+      });
 
-    // Calculate max bid for each team
-    const maxBids = teams.map((team) => {
-      const currentPlayerCount = team.players.length;
-      const playersNeeded = tournament.minPlayers - currentPlayerCount;
+      // Count players per category
+      const playersByCategory = {};
+      purchasedPlayers.forEach(player => {
+        const category = player.category;
+        if (!playersByCategory[category]) {
+          playersByCategory[category] = 0;
+        }
+        playersByCategory[category]++;
+      });
 
-      // If team already has enough players, max bid is just remaining balance
-      if (playersNeeded <= 0) {
-        return {
-          teamId: team._id.toString(),
-          maxBid: team.remainingAmount
-        };
+      // Calculate required amount based on category quotas
+      let requiredAmount = 0;
+      
+      if (tournament.categories && tournament.categories.length > 0) {
+        // Use tournament categories
+        for (const category of tournament.categories) {
+          const currentCount = playersByCategory[category.name] || 0;
+          const minRequired = category.minPlayers || 0;
+          const remainingNeeded = Math.max(0, minRequired - currentCount);
+          
+          if (remainingNeeded > 0) {
+            // Get minimum base price for this category from unsold players
+            const unsoldInCategory = allPlayers.filter(p => 
+              p.category === category.name &&
+              (p.soldPrice === null || p.soldTo === null)
+            );
+            
+            if (unsoldInCategory.length > 0) {
+              const minBasePrice = Math.min(...unsoldInCategory.map(p => p.basePrice));
+              requiredAmount += remainingNeeded * minBasePrice;
+            } else {
+              // No unsold players in this category, use category basePrice
+              requiredAmount += remainingNeeded * category.basePrice;
+            }
+          }
+        }
+      } else {
+        // Fallback to old logic if no categories defined
+        const currentPlayerCount = purchasedPlayers.length;
+        const playersNeeded = tournament.minPlayers - currentPlayerCount;
+        
+        if (playersNeeded > 0) {
+          const unsoldPlayers = allPlayers.filter(p => 
+            p.soldPrice === null || p.soldTo === null
+          );
+          
+          if (unsoldPlayers.length > 0) {
+            const minBasePrice = Math.min(...unsoldPlayers.map(p => p.basePrice));
+            requiredAmount = playersNeeded * minBasePrice;
+          }
+        }
       }
 
-      // Calculate required amount for remaining players
-      const requiredAmount = playersNeeded * minBasePrice;
-      const maxBid = Math.max(0, team.remainingAmount - requiredAmount);
+      // Max bid = remainingAmount - requiredAmount (can be negative)
+      const maxBid = team.remainingAmount - requiredAmount;
 
       return {
         teamId: team._id.toString(),
         maxBid
       };
-    });
+    }));
 
     res.status(200).json({
       success: true,

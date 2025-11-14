@@ -2,6 +2,78 @@
 const Tournament = require('../models/Tournament');
 const { isValidObjectId } = require('../utils/validators');
 
+// Validate bid increments
+const validateBidIncrements = (bidIncrements) => {
+  if (!Array.isArray(bidIncrements) || bidIncrements.length === 0) {
+    return { valid: false, message: 'Bid increments must be a non-empty array' };
+  }
+
+  // Sort by minPrice
+  const sorted = [...bidIncrements].sort((a, b) => a.minPrice - b.minPrice);
+
+  for (let i = 0; i < sorted.length; i++) {
+    const current = sorted[i];
+    
+    // Validate required fields
+    if (typeof current.minPrice !== 'number' || current.minPrice < 0) {
+      return { valid: false, message: 'Each bid increment must have a valid minPrice >= 0' };
+    }
+    if (typeof current.increment !== 'number' || current.increment < 1) {
+      return { valid: false, message: 'Each bid increment must have a valid increment >= 1' };
+    }
+
+    // Check for overlaps (except last one which can have maxPrice: null)
+    if (i < sorted.length - 1) {
+      if (current.maxPrice === null || current.maxPrice === undefined) {
+        return { valid: false, message: 'Only the last bid increment can have maxPrice as null' };
+      }
+      if (typeof current.maxPrice !== 'number' || current.maxPrice <= current.minPrice) {
+        return { valid: false, message: 'maxPrice must be greater than minPrice' };
+      }
+      // Check overlap with next
+      if (i + 1 < sorted.length && current.maxPrice >= sorted[i + 1].minPrice) {
+        return { valid: false, message: 'Bid increment ranges cannot overlap' };
+      }
+    } else {
+      // Last range - maxPrice can be null or must be > minPrice
+      if (current.maxPrice !== null && current.maxPrice <= current.minPrice) {
+        return { valid: false, message: 'maxPrice must be greater than minPrice' };
+      }
+    }
+  }
+
+  return { valid: true };
+};
+
+// Validate categories
+const validateCategories = (categories) => {
+  if (!Array.isArray(categories)) {
+    return { valid: false, message: 'Categories must be an array' };
+  }
+
+  const categoryNames = new Set();
+  for (const category of categories) {
+    if (!category.name || typeof category.name !== 'string' || category.name.trim() === '') {
+      return { valid: false, message: 'Each category must have a valid name' };
+    }
+    if (typeof category.basePrice !== 'number' || category.basePrice < 0) {
+      return { valid: false, message: 'Each category must have a valid basePrice >= 0' };
+    }
+    if (typeof category.minPlayers !== 'number' || category.minPlayers < 0) {
+      return { valid: false, message: 'Each category must have a valid minPlayers >= 0' };
+    }
+    
+    // Check for duplicate names
+    const nameLower = category.name.trim().toLowerCase();
+    if (categoryNames.has(nameLower)) {
+      return { valid: false, message: `Duplicate category name: ${category.name}` };
+    }
+    categoryNames.add(nameLower);
+  }
+
+  return { valid: true };
+};
+
 // Get all tournaments
 const getAllTournaments = async (req, res) => {
   try {
@@ -96,11 +168,55 @@ const createTournament = async (req, res) => {
       maxPlayers,
       totalTeams,
       totalPlayers,
-      status
+      status,
+      bidIncrements,
+      categories
     } = req.body;
 
     // Get logo from file upload if available, otherwise use empty string
     const logo = req.file ? req.file.path : '';
+
+    // Parse bidIncrements if provided as string (from form data)
+    let parsedBidIncrements = bidIncrements;
+    if (typeof bidIncrements === 'string') {
+      try {
+        parsedBidIncrements = JSON.parse(bidIncrements);
+      } catch (e) {
+        parsedBidIncrements = bidIncrements;
+      }
+    }
+
+    // Parse categories if provided as string (from form data)
+    let parsedCategories = categories;
+    if (typeof categories === 'string') {
+      try {
+        parsedCategories = JSON.parse(categories);
+      } catch (e) {
+        parsedCategories = categories;
+      }
+    }
+
+    // Validate bid increments if provided
+    if (parsedBidIncrements !== undefined) {
+      const bidValidation = validateBidIncrements(parsedBidIncrements);
+      if (!bidValidation.valid) {
+        return res.status(400).json({
+          success: false,
+          message: bidValidation.message
+        });
+      }
+    }
+
+    // Validate categories if provided
+    if (parsedCategories !== undefined) {
+      const categoryValidation = validateCategories(parsedCategories);
+      if (!categoryValidation.valid) {
+        return res.status(400).json({
+          success: false,
+          message: categoryValidation.message
+        });
+      }
+    }
 
     // Validate required fields
     if (!name || !category || !location || !auctionDate || !tournamentDate ||
@@ -152,7 +268,7 @@ const createTournament = async (req, res) => {
       ).join(' ');
     };
 
-    const tournament = new Tournament({
+    const tournamentData = {
       name: capitalizeWords(name),
       logo: logo || '',
       category,
@@ -165,7 +281,19 @@ const createTournament = async (req, res) => {
       totalTeams,
       totalPlayers,
       status: status || 'upcoming'
-    });
+    };
+
+    // Add bidIncrements if provided
+    if (parsedBidIncrements !== undefined) {
+      tournamentData.bidIncrements = parsedBidIncrements;
+    }
+
+    // Add categories if provided
+    if (parsedCategories !== undefined) {
+      tournamentData.categories = parsedCategories;
+    }
+
+    const tournament = new Tournament(tournamentData);
 
     await tournament.save();
 
@@ -216,8 +344,52 @@ const updateTournament = async (req, res) => {
       maxPlayers,
       totalTeams,
       totalPlayers,
-      status
+      status,
+      bidIncrements,
+      categories
     } = req.body;
+
+    // Parse bidIncrements if provided as string (from form data)
+    let parsedBidIncrements = bidIncrements;
+    if (bidIncrements !== undefined) {
+      if (typeof bidIncrements === 'string') {
+        try {
+          parsedBidIncrements = JSON.parse(bidIncrements);
+        } catch (e) {
+          parsedBidIncrements = bidIncrements;
+        }
+      }
+      // Validate bid increments
+      const bidValidation = validateBidIncrements(parsedBidIncrements);
+      if (!bidValidation.valid) {
+        return res.status(400).json({
+          success: false,
+          message: bidValidation.message
+        });
+      }
+      tournament.bidIncrements = parsedBidIncrements;
+    }
+
+    // Parse categories if provided as string (from form data)
+    let parsedCategories = categories;
+    if (categories !== undefined) {
+      if (typeof categories === 'string') {
+        try {
+          parsedCategories = JSON.parse(categories);
+        } catch (e) {
+          parsedCategories = categories;
+        }
+      }
+      // Validate categories
+      const categoryValidation = validateCategories(parsedCategories);
+      if (!categoryValidation.valid) {
+        return res.status(400).json({
+          success: false,
+          message: categoryValidation.message
+        });
+      }
+      tournament.categories = parsedCategories;
+    }
 
     if (name) {
       // Capitalize each word in the name

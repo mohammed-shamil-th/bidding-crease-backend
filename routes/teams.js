@@ -6,13 +6,17 @@ const {
   getTeam,
   createTeam,
   updateTeam,
-  deleteTeam
+  deleteTeam,
+  downloadTeamsReport,
+  downloadTeamReport
 } = require('../controllers/teamController');
 const { authenticateAdmin } = require('../middleware/auth');
 const { uploadTeamLogo } = require('../config/cloudinary');
 
 // Public routes
 router.get('/', getAllTeams);
+router.get('/download/pdf', downloadTeamsReport);
+router.get('/:id/download/pdf', downloadTeamReport);
 router.get('/:id', getTeam);
 
 // Admin only routes

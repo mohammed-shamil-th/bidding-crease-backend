@@ -2,6 +2,9 @@
 const Team = require('../models/Team');
 const Tournament = require('../models/Tournament');
 const { isValidObjectId, isValidMobile } = require('../utils/validators');
+const PDFDocument = require('pdfkit');
+const fs = require('fs');
+const path = require('path');
 
 // Get all teams
 const getAllTeams = async (req, res) => {
@@ -271,11 +274,354 @@ const deleteTeam = async (req, res) => {
   }
 };
 
+// Helper to format currency consistently
+const formatCurrency = (amount = 0) => {
+  try {
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      maximumFractionDigits: 0
+    }).format(amount || 0);
+  } catch (error) {
+    return `₹${amount || 0}`;
+  }
+};
+
+// Download teams PDF report
+const downloadTeamsReport = async (req, res) => {
+  try {
+    const { tournamentId } = req.query;
+
+    if (!tournamentId || !isValidObjectId(tournamentId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid tournament ID is required'
+      });
+    }
+
+    const tournament = await Tournament.findById(tournamentId);
+    if (!tournament) {
+      return res.status(404).json({
+        success: false,
+        message: 'Tournament not found'
+      });
+    }
+
+    const teams = await Team.find({ tournamentId })
+      .populate({
+        path: 'players',
+        select: 'name role category basePrice soldPrice soldTo wasAuctioned',
+        populate: {
+          path: 'soldTo',
+          select: 'name'
+        }
+      })
+      .sort({ name: 1 });
+
+    const fileName = `biddingcrease-team-report-${tournament.name.replace(/\s+/g, '-').toLowerCase()}.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    doc.pipe(res);
+
+    // Branding header
+    const appName = 'BiddingCrease';
+    const logoPath = path.resolve(__dirname, '..', '..', 'frontend', 'app', 'icon.png');
+    if (fs.existsSync(logoPath)) {
+      doc.image(logoPath, 50, 40, { width: 60, height: 60 });
+    }
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(24)
+      .fillColor('#0f172a')
+      .text(appName, 120, 50);
+    doc
+      .font('Helvetica')
+      .fontSize(12)
+      .fillColor('#475569')
+      .text('Official Auction Team Summary', 120, 78);
+
+    doc.moveDown(2);
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(16)
+      .fillColor('#0f172a')
+      .text(`Tournament: ${tournament.name}`);
+    doc
+      .font('Helvetica')
+      .fontSize(12)
+      .fillColor('#475569')
+      .text(`Status: ${tournament.status}`);
+    doc
+      .font('Helvetica')
+      .fontSize(12)
+      .fillColor('#475569')
+      .text(`Auction Date: ${tournament.auctionDate ? new Date(tournament.auctionDate).toLocaleDateString('en-IN') : 'N/A'}`);
+
+    doc.moveDown(1.5);
+
+    if (!teams.length) {
+      doc
+        .font('Helvetica-Oblique')
+        .fontSize(12)
+        .fillColor('#64748b')
+        .text('No teams have been registered for this tournament yet.');
+      doc.end();
+      return;
+    }
+
+    teams.forEach((team, index) => {
+      if (doc.y > doc.page.height - 120) {
+        doc.addPage();
+      }
+
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(14)
+        .fillColor('#0f172a')
+        .text(`${index + 1}. ${team.name}`);
+      doc
+        .font('Helvetica')
+        .fontSize(11)
+        .fillColor('#1f2937')
+        .text(`Owner: ${team.owner || 'N/A'}`)
+        .text(`Contact: ${team.mobile || 'N/A'}`)
+        .text(`Budget: ${formatCurrency(team.budget || tournament.teamBudget)}`)
+        .text(`Remaining Amount: ${formatCurrency(team.remainingAmount || 0)}`);
+
+      doc.moveDown(0.5);
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(12)
+        .fillColor('#0f172a')
+        .text(`Players (${team.players.length})`);
+      doc.moveDown(0.2);
+
+      if (!team.players.length) {
+        doc
+          .font('Helvetica-Oblique')
+          .fontSize(10)
+          .fillColor('#64748b')
+          .text('No players assigned yet.');
+      } else {
+        team.players.forEach((player) => {
+          if (doc.y > doc.page.height - 80) {
+            doc.addPage();
+          }
+
+          const statusText = player.soldPrice
+            ? `Sold for ${formatCurrency(player.soldPrice)} to ${player.soldTo?.name || 'N/A'}`
+            : player.wasAuctioned
+            ? `Unsold (Base: ${formatCurrency(player.basePrice || 0)})`
+            : `Not auctioned yet (Base: ${formatCurrency(player.basePrice || 0)})`;
+
+          doc
+            .font('Helvetica')
+            .fontSize(10)
+            .fillColor('#334155')
+            .text(`• ${player.name} (${player.role || 'Role N/A'} • ${player.category || 'Category'})`);
+          doc
+            .font('Helvetica')
+            .fontSize(9)
+            .fillColor('#64748b')
+            .text(`  ${statusText}`);
+          doc.moveDown(0.2);
+        });
+      }
+
+      doc.moveDown(1);
+    });
+
+    doc.end();
+  } catch (error) {
+    console.error('Download teams report error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: 'Error generating teams report'
+      });
+    } else {
+      res.end();
+    }
+  }
+};
+
+const downloadTeamReport = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const includePrices = req.query.includePrices === 'true';
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid team ID'
+      });
+    }
+
+    const team = await Team.findById(id)
+      .populate({
+        path: 'players',
+        select: 'name role category basePrice soldPrice wasAuctioned',
+        populate: {
+          path: 'soldTo',
+          select: 'name'
+        }
+      })
+      .populate('tournamentId', 'name status auctionDate');
+
+    if (!team) {
+      return res.status(404).json({
+        success: false,
+        message: 'Team not found'
+      });
+    }
+
+    const fileName = `biddingcrease-${team.name.replace(/\s+/g, '-').toLowerCase()}-players.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    doc.pipe(res);
+
+    const appName = 'BiddingCrease';
+    const logoPath = path.resolve(__dirname, '..', '..', 'frontend', 'app', 'icon.png');
+    if (fs.existsSync(logoPath)) {
+      doc.image(logoPath, 50, 40, { width: 60, height: 60 });
+    }
+
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(24)
+      .fillColor('#0f172a')
+      .text(appName, 120, 50);
+    doc
+      .font('Helvetica')
+      .fontSize(12)
+      .fillColor('#475569')
+      .text('Team Player Report', 120, 78);
+
+    doc.moveDown(2);
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(18)
+      .fillColor('#0f172a')
+      .text(team.name);
+    doc
+      .moveTo(doc.x, doc.y + 2)
+      .lineTo(doc.page.width - doc.page.margins.right, doc.y + 2)
+      .stroke('#cbd5f5');
+    doc.moveDown(0.5);
+    doc
+      .font('Helvetica')
+      .fontSize(12)
+      .fillColor('#475569')
+      .text(`Owner: ${team.owner || 'N/A'}`)
+      .text(`Tournament: ${team.tournamentId?.name || 'N/A'}`)
+      .text(`Status: ${team.tournamentId?.status || 'N/A'}`)
+      .text(
+        `Auction Date: ${
+          team.tournamentId?.auctionDate
+            ? new Date(team.tournamentId.auctionDate).toLocaleDateString('en-IN')
+            : 'N/A'
+        }`
+      );
+
+    doc.moveDown(1.5);
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(14)
+      .fillColor('#0f172a')
+      .text('Squad');
+    doc.moveDown(0.5);
+
+    if (!team.players.length) {
+      doc
+        .font('Helvetica-Oblique')
+        .fontSize(12)
+        .fillColor('#64748b')
+        .text('No players have been added to this team yet.');
+    } else {
+      team.players.forEach((player, index) => {
+        if (doc.y > doc.page.height - 120) {
+          doc.addPage();
+        }
+
+        doc
+          .font('Helvetica-Bold')
+          .fontSize(12)
+          .fillColor('#0f172a')
+          .text(`${index + 1}. ${player.name}`);
+        doc
+          .font('Helvetica')
+          .fontSize(11)
+          .fillColor('#475569')
+          .text(`Role: ${player.role || 'N/A'} • Category: ${player.category || 'N/A'}`);
+
+        if (includePrices) {
+          const basePrice = formatCurrency(player.basePrice || 0);
+          const soldPrice = player.soldPrice
+            ? formatCurrency(player.soldPrice)
+            : player.wasAuctioned
+            ? 'Unsold'
+            : 'Not auctioned yet';
+          doc
+            .font('Helvetica')
+            .fontSize(10)
+            .fillColor('#64748b')
+            .text(`Base Price: ${basePrice} | Sold Price: ${soldPrice}`);
+        }
+
+        doc.moveDown(0.6);
+      });
+    }
+
+    if (includePrices) {
+      const totalSpent = team.players.reduce(
+        (sum, player) => sum + (player.soldPrice || 0),
+        0
+      );
+      const totalRemaining = team.remainingAmount || 0;
+
+      doc.moveDown(1);
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(14)
+        .fillColor('#0f172a')
+        .text('Financial Summary');
+      doc.moveDown(0.4);
+      doc
+        .font('Helvetica')
+        .fontSize(12)
+        .fillColor('#0f172a')
+        .text(`Total Auctioned Amount: ${formatCurrency(totalSpent)}`)
+        .text(`Remaining Balance: ${formatCurrency(totalRemaining)}`)
+        .text(`Initial Budget: ${formatCurrency(team.budget || 0)}`);
+    }
+
+    doc.end();
+  } catch (error) {
+    console.error('Download team report error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: 'Error generating team report'
+      });
+    } else {
+      res.end();
+    }
+  }
+};
+
 module.exports = {
   getAllTeams,
   getTeam,
   createTeam,
   updateTeam,
-  deleteTeam
+  deleteTeam,
+  downloadTeamsReport,
+  downloadTeamReport
 };
 
