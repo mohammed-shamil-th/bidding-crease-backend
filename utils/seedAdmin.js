@@ -5,18 +5,17 @@ const seedAdmin = async () => {
   try {
     // Check if admin already exists
     const existingAdmin = await Admin.findOne({ email: 'admin@biddingrease.com' });
-    
+    const email = process.env.ADMIN_EMAIL;
+    const password = process.env.ADMIN_PSWD;
     if (!existingAdmin) {
       // Create default admin
       const admin = new Admin({
-        email: 'admin@biddingrease.com',
-        password: 'biddingcrease2025.'
+        email: email,
+        password: password
       });
       
       await admin.save();
       console.log('Default admin created successfully');
-      console.log('Email: admin@biddingrease.com');
-      console.log('Password: biddingcrease2025.');
     } else {
       console.log('Admin already exists');
     }

@@ -85,7 +85,7 @@ io.on('connection', (socket) => {
           // Emit current auction state to this socket only
           socket.emit('player:selected', {
             player: currentPlayer,
-            currentBidPrice: auctionState.currentBidPrice || currentPlayer.basePrice,
+            currentBidPrice: auctionState.currentBidPrice || 0,
           });
           socket.emit('auction:started', {
             isActive: auctionState.isActive,

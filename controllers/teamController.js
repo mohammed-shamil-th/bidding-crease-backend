@@ -18,19 +18,48 @@ const getAllTeams = async (req, res) => {
     
     const total = await Team.countDocuments(query);
     const teams = await Team.find(query)
-      .populate('players', 'name role image soldPrice category')
-      .populate('tournamentId', 'name')
+      .populate('players', 'name role image soldPrice basePrice wasAuctioned categoryId')
+      .populate('tournamentId', 'name categories')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
+
+    // Attach category name to each player based on tournament categories
+    const mappedTeams = teams.map((teamDoc) => {
+      const team = teamDoc.toObject();
+
+      if (
+        team.tournamentId &&
+        Array.isArray(team.tournamentId.categories) &&
+        Array.isArray(team.players)
+      ) {
+        const categories = team.tournamentId.categories;
+        team.players = team.players.map((player) => {
+          if (player.categoryId) {
+            const matchedCategory = categories.find(
+              (cat) =>
+                cat._id &&
+                cat._id.toString() === player.categoryId.toString()
+            );
+
+            if (matchedCategory && matchedCategory.name) {
+              return { ...player, category: matchedCategory.name };
+            }
+          }
+          return player;
+        });
+      }
+
+      return team;
+    });
     
     res.status(200).json({
       success: true,
-      count: teams.length,
+      count: mappedTeams.length,
       total,
       page,
       totalPages: Math.ceil(total / limit),
-      data: teams
+      data: mappedTeams
     });
   } catch (error) {
     console.error('Get teams error:', error);
@@ -53,14 +82,43 @@ const getTeam = async (req, res) => {
       });
     }
 
-    const team = await Team.findById(id)
+    const teamDoc = await Team.findById(id)
       .populate('players')
-      .populate('tournamentId');
+      .populate('tournamentId', 'name categories');
     
-    if (!team) {
+    if (!teamDoc) {
       return res.status(404).json({
         success: false,
         message: 'Team not found'
+      });
+    }
+
+    const team = teamDoc.toObject();
+
+    // Attach category name to each player based on tournament categories
+    if (
+      team.tournamentId &&
+      Array.isArray(team.tournamentId.categories) &&
+      Array.isArray(team.players)
+    ) {
+      const categories = team.tournamentId.categories;
+      team.players = team.players.map((player) => {
+        if (player.categoryId) {
+          const matchedCategory = categories.find(
+            (cat) =>
+              cat._id &&
+              cat._id.toString() === player.categoryId.toString()
+          );
+
+          if (matchedCategory && matchedCategory.name) {
+            return { 
+              ...player, 
+              category: matchedCategory.name,
+              basePrice: matchedCategory.basePrice || 0
+            };
+          }
+        }
+        return player;
       });
     }
 
@@ -274,7 +332,9 @@ const deleteTeam = async (req, res) => {
   }
 };
 
-// Helper to format currency consistently
+// ==============================
+// CURRENCY FORMATTER
+// ==============================
 const formatCurrency = (amount = 0) => {
   try {
     return new Intl.NumberFormat('en-IN', {
@@ -287,147 +347,177 @@ const formatCurrency = (amount = 0) => {
   }
 };
 
-// Download teams PDF report
+// ==============================
+// PDF HELPER FUNCTIONS
+// ==============================
+const HEADER_FONT = "Helvetica-Bold";
+const NORMAL_FONT = "Helvetica";
+const LIGHT_FONT = "Helvetica-Oblique";
+
+const addBrandHeader = (doc, title, subtitle) => {
+  const logoPath = path.resolve(__dirname, "..", "..", "frontend", "app", "icon.png");
+
+  if (fs.existsSync(logoPath)) {
+    doc.image(logoPath, 50, 40, { width: 60 });
+  }
+
+  doc
+    .font(HEADER_FONT)
+    .fontSize(24)
+    .fillColor("#0f172a")
+    .text("BiddingCrease", 120, 50);
+
+  doc
+    .font(NORMAL_FONT)
+    .fontSize(12)
+    .fillColor("#475569")
+    .text(title, 120, 78);
+
+  if (subtitle) {
+    doc
+      .font(NORMAL_FONT)
+      .fontSize(11)
+      .fillColor("#64748b")
+      .text(subtitle, 120, 95);
+  }
+
+  doc.moveDown(2);
+};
+
+const sectionTitle = (doc, title) => {
+  doc
+    .font(HEADER_FONT)
+    .fontSize(16)
+    .fillColor("#0f172a")
+    .text(title);
+
+  doc
+    .moveTo(50, doc.y + 2)
+    .lineTo(doc.page.width - 50, doc.y + 2)
+    .stroke("#cbd5e1");
+
+  doc.moveDown(1);
+};
+
+const safePageBreak = (doc, threshold = 120) => {
+  if (doc.y > doc.page.height - threshold) doc.addPage();
+};
+
+// ==============================
+// DOWNLOAD ALL TEAMS REPORT
+// ==============================
 const downloadTeamsReport = async (req, res) => {
   try {
     const { tournamentId } = req.query;
 
     if (!tournamentId || !isValidObjectId(tournamentId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Valid tournament ID is required'
-      });
+      return res.status(400).json({ success: false, message: "Valid tournament ID is required" });
     }
 
     const tournament = await Tournament.findById(tournamentId);
     if (!tournament) {
-      return res.status(404).json({
-        success: false,
-        message: 'Tournament not found'
-      });
+      return res.status(404).json({ success: false, message: "Tournament not found" });
     }
 
     const teams = await Team.find({ tournamentId })
       .populate({
-        path: 'players',
-        select: 'name role category basePrice soldPrice soldTo wasAuctioned',
-        populate: {
-          path: 'soldTo',
-          select: 'name'
-        }
+        path: "players",
+        select: "name role category basePrice soldPrice soldTo wasAuctioned",
+        populate: { path: "soldTo", select: "name" }
       })
       .sort({ name: 1 });
 
-    const fileName = `biddingcrease-team-report-${tournament.name.replace(/\s+/g, '-').toLowerCase()}.pdf`;
+    const fileName = `biddingcrease-team-report-${tournament.name.replace(/\s+/g, "-").toLowerCase()}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
 
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-
-    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    const doc = new PDFDocument({ margin: 50, size: "A4" });
     doc.pipe(res);
 
-    // Branding header
-    const appName = 'BiddingCrease';
-    const logoPath = path.resolve(__dirname, '..', '..', 'frontend', 'app', 'icon.png');
-    if (fs.existsSync(logoPath)) {
-      doc.image(logoPath, 50, 40, { width: 60, height: 60 });
-    }
-    doc
-      .font('Helvetica-Bold')
-      .fontSize(24)
-      .fillColor('#0f172a')
-      .text(appName, 120, 50);
-    doc
-      .font('Helvetica')
-      .fontSize(12)
-      .fillColor('#475569')
-      .text('Official Auction Team Summary', 120, 78);
+    // HEADER
+    addBrandHeader(doc, "Official Auction Team Summary");
 
-    doc.moveDown(2);
+    // TOURNAMENT INFO
+    sectionTitle(doc, "Tournament Details");
     doc
-      .font('Helvetica-Bold')
-      .fontSize(16)
-      .fillColor('#0f172a')
-      .text(`Tournament: ${tournament.name}`);
-    doc
-      .font('Helvetica')
+      .font(NORMAL_FONT)
       .fontSize(12)
-      .fillColor('#475569')
-      .text(`Status: ${tournament.status}`);
-    doc
-      .font('Helvetica')
-      .fontSize(12)
-      .fillColor('#475569')
-      .text(`Auction Date: ${tournament.auctionDate ? new Date(tournament.auctionDate).toLocaleDateString('en-IN') : 'N/A'}`);
+      .fillColor("#475569")
+      .text(`Name: ${tournament.name}`)
+      .text(`Status: ${tournament.status}`)
+      .text(
+        `Auction Date: ${
+          tournament.auctionDate
+            ? new Date(tournament.auctionDate).toLocaleDateString("en-IN")
+            : "N/A"
+        }`
+      );
 
-    doc.moveDown(1.5);
+    doc.moveDown(1);
 
     if (!teams.length) {
       doc
-        .font('Helvetica-Oblique')
+        .font(LIGHT_FONT)
         .fontSize(12)
-        .fillColor('#64748b')
-        .text('No teams have been registered for this tournament yet.');
+        .fillColor("#64748b")
+        .text("No teams have been registered yet.");
       doc.end();
       return;
     }
 
+    // TEAMS LIST
     teams.forEach((team, index) => {
-      if (doc.y > doc.page.height - 120) {
-        doc.addPage();
-      }
+      safePageBreak(doc);
+
+      sectionTitle(doc, `${index + 1}. ${team.name}`);
 
       doc
-        .font('Helvetica-Bold')
-        .fontSize(14)
-        .fillColor('#0f172a')
-        .text(`${index + 1}. ${team.name}`);
-      doc
-        .font('Helvetica')
+        .font(NORMAL_FONT)
         .fontSize(11)
-        .fillColor('#1f2937')
-        .text(`Owner: ${team.owner || 'N/A'}`)
-        .text(`Contact: ${team.mobile || 'N/A'}`)
+        .fillColor("#1f2937")
+        .text(`Owner: ${team.owner || "N/A"}`)
+        .text(`Contact: ${team.mobile || "N/A"}`)
         .text(`Budget: ${formatCurrency(team.budget || tournament.teamBudget)}`)
         .text(`Remaining Amount: ${formatCurrency(team.remainingAmount || 0)}`);
 
-      doc.moveDown(0.5);
+      doc.moveDown(0.8);
+
       doc
-        .font('Helvetica-Bold')
+        .font(HEADER_FONT)
         .fontSize(12)
-        .fillColor('#0f172a')
+        .fillColor("#0f172a")
         .text(`Players (${team.players.length})`);
-      doc.moveDown(0.2);
+
+      doc.moveDown(0.5);
 
       if (!team.players.length) {
         doc
-          .font('Helvetica-Oblique')
+          .font(LIGHT_FONT)
           .fontSize(10)
-          .fillColor('#64748b')
-          .text('No players assigned yet.');
+          .fillColor("#64748b")
+          .text("No players assigned.");
       } else {
         team.players.forEach((player) => {
-          if (doc.y > doc.page.height - 80) {
-            doc.addPage();
-          }
+          safePageBreak(doc);
 
           const statusText = player.soldPrice
-            ? `Sold for ${formatCurrency(player.soldPrice)} to ${player.soldTo?.name || 'N/A'}`
+            ? `Sold for ${formatCurrency(player.soldPrice)} to ${player.soldTo?.name || "N/A"}`
             : player.wasAuctioned
-            ? `Unsold (Base: ${formatCurrency(player.basePrice || 0)})`
-            : `Not auctioned yet (Base: ${formatCurrency(player.basePrice || 0)})`;
+            ? `Unsold (Base: ${formatCurrency(player.basePrice)})`
+            : `Not auctioned yet (Base: ${formatCurrency(player.basePrice)})`;
 
           doc
-            .font('Helvetica')
-            .fontSize(10)
-            .fillColor('#334155')
-            .text(`• ${player.name} (${player.role || 'Role N/A'} • ${player.category || 'Category'})`);
+            .font(NORMAL_FONT)
+            .fontSize(11)
+            .fillColor("#334155")
+            .text(`• ${player.name} (${player.role || "Role N/A"} • ${player.category})`);
           doc
-            .font('Helvetica')
-            .fontSize(9)
-            .fillColor('#64748b')
+            .font(NORMAL_FONT)
+            .fontSize(10)
+            .fillColor("#64748b")
             .text(`  ${statusText}`);
-          doc.moveDown(0.2);
+
+          doc.moveDown(0.3);
         });
       }
 
@@ -436,184 +526,218 @@ const downloadTeamsReport = async (req, res) => {
 
     doc.end();
   } catch (error) {
-    console.error('Download teams report error:', error);
+    console.error("Download teams report error:", error);
     if (!res.headersSent) {
-      res.status(500).json({
-        success: false,
-        message: 'Error generating teams report'
-      });
-    } else {
-      res.end();
-    }
+      res.status(500).json({ success: false, message: "Error generating teams report" });
+    } else res.end();
   }
+};
+
+// ==============================
+// DOWNLOAD SINGLE TEAM REPORT
+// ==============================
+// Helper function to get role icon
+const getRoleIcon = (role) => {
+  switch (role) {
+    case 'Batter':
+      return '🏏'; // Bat icon
+    case 'Bowler':
+      return '⚫'; // Ball icon
+    case 'All-Rounder':
+      return '🏏⚫'; // Bat and ball
+    case 'Wicketkeeper':
+    case 'Keeper':
+      return '🧤'; // Keeper glove
+    default:
+      return '•';
+  }
+};
+
+// Helper function to get basePrice from category
+const getPlayerBasePriceFromCategory = (player, tournament) => {
+  if (!player || !player.categoryId || !tournament || !Array.isArray(tournament.categories)) {
+    return 0;
+  }
+  const category = tournament.categories.id(player.categoryId);
+  return category ? (category.basePrice || 0) : 0;
 };
 
 const downloadTeamReport = async (req, res) => {
   try {
     const { id } = req.params;
-    const includePrices = req.query.includePrices === 'true';
+    const includePrices = req.query.includePrices === "true";
 
     if (!isValidObjectId(id)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid team ID'
-      });
+      return res.status(400).json({ success: false, message: "Invalid team ID" });
     }
 
     const team = await Team.findById(id)
       .populate({
-        path: 'players',
-        select: 'name role category basePrice soldPrice wasAuctioned',
-        populate: {
-          path: 'soldTo',
-          select: 'name'
-        }
+        path: "players",
+        select: "name role categoryId soldPrice wasAuctioned",
+        populate: { path: "soldTo", select: "name" }
       })
-      .populate('tournamentId', 'name status auctionDate');
+      .populate("tournamentId", "name status auctionDate categories");
 
     if (!team) {
-      return res.status(404).json({
-        success: false,
-        message: 'Team not found'
-      });
+      return res.status(404).json({ success: false, message: "Team not found" });
     }
 
-    const fileName = `biddingcrease-${team.name.replace(/\s+/g, '-').toLowerCase()}-players.pdf`;
+    const tournament = team.tournamentId;
+    
+    // Resolve category names for players
+    const playersWithCategories = team.players.map(player => {
+      const playerObj = player.toObject ? player.toObject() : player;
+      let categoryName = '';
+      if (playerObj.categoryId && tournament && Array.isArray(tournament.categories)) {
+        const category = tournament.categories.id(playerObj.categoryId);
+        if (category) {
+          categoryName = category.name || '';
+        }
+      }
+      return { ...playerObj, category: categoryName };
+    });
 
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    const fileName = `biddingcrease-${team.name.replace(/\s+/g, "-").toLowerCase()}-players.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
 
-    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    const doc = new PDFDocument({ margin: 50, size: "A4" });
     doc.pipe(res);
 
-    const appName = 'BiddingCrease';
-    const logoPath = path.resolve(__dirname, '..', '..', 'frontend', 'app', 'icon.png');
-    if (fs.existsSync(logoPath)) {
-      doc.image(logoPath, 50, 40, { width: 60, height: 60 });
+    // TOURNAMENT HEADER (centered, large, bold)
+    doc
+      .font(HEADER_FONT)
+      .fontSize(28)
+      .fillColor("#0f172a")
+      .text(tournament?.name || "Tournament", {
+        align: "center",
+        y: 50
+      });
+
+    doc.y = 90;
+
+    // TEAM LOGO AND NAME
+    const teamLogoPath = team.logo ? path.resolve(__dirname, "..", "..", team.logo) : null;
+    const logoExists = teamLogoPath && fs.existsSync(teamLogoPath);
+    
+    if (logoExists) {
+      try {
+        doc.image(teamLogoPath, doc.page.width / 2 - 40, doc.y, { width: 80, height: 80, align: "center" });
+        doc.y += 100;
+      } catch (err) {
+        console.error("Error loading team logo:", err);
+        doc.y += 20;
+      }
+    } else {
+      doc.y += 20;
     }
 
+    // Team name (centered, below logo)
     doc
-      .font('Helvetica-Bold')
-      .fontSize(24)
-      .fillColor('#0f172a')
-      .text(appName, 120, 50);
-    doc
-      .font('Helvetica')
-      .fontSize(12)
-      .fillColor('#475569')
-      .text('Team Player Report', 120, 78);
-
-    doc.moveDown(2);
-    doc
-      .font('Helvetica-Bold')
-      .fontSize(18)
-      .fillColor('#0f172a')
-      .text(team.name);
-    doc
-      .moveTo(doc.x, doc.y + 2)
-      .lineTo(doc.page.width - doc.page.margins.right, doc.y + 2)
-      .stroke('#cbd5f5');
-    doc.moveDown(0.5);
-    doc
-      .font('Helvetica')
-      .fontSize(12)
-      .fillColor('#475569')
-      .text(`Owner: ${team.owner || 'N/A'}`)
-      .text(`Tournament: ${team.tournamentId?.name || 'N/A'}`)
-      .text(`Status: ${team.tournamentId?.status || 'N/A'}`)
-      .text(
-        `Auction Date: ${
-          team.tournamentId?.auctionDate
-            ? new Date(team.tournamentId.auctionDate).toLocaleDateString('en-IN')
-            : 'N/A'
-        }`
-      );
+      .font(HEADER_FONT)
+      .fontSize(20)
+      .fillColor("#1e293b")
+      .text(team.name, {
+        align: "center"
+      });
 
     doc.moveDown(1.5);
-    doc
-      .font('Helvetica-Bold')
-      .fontSize(14)
-      .fillColor('#0f172a')
-      .text('Squad');
-    doc.moveDown(0.5);
 
-    if (!team.players.length) {
+    // PLAYER LIST
+    if (!playersWithCategories.length) {
       doc
-        .font('Helvetica-Oblique')
+        .font(LIGHT_FONT)
         .fontSize(12)
-        .fillColor('#64748b')
-        .text('No players have been added to this team yet.');
+        .fillColor("#64748b")
+        .text("No players added.", { align: "center" });
     } else {
-      team.players.forEach((player, index) => {
-        if (doc.y > doc.page.height - 120) {
-          doc.addPage();
+      playersWithCategories.forEach((player, idx) => {
+        safePageBreak(doc, 80);
+
+        // Role icon
+        const roleIcon = getRoleIcon(player.role);
+        doc
+          .font(NORMAL_FONT)
+          .fontSize(14)
+          .fillColor("#475569")
+          .text(roleIcon, { continued: true });
+
+        // Player name with split colors
+        const nameParts = player.name.split(' ');
+        const firstName = nameParts[0] || '';
+        const restName = nameParts.slice(1).join(' ') || '';
+
+        // First part (before space) - blue color
+        doc
+          .font(HEADER_FONT)
+          .fontSize(14)
+          .fillColor("#1e40af")
+          .text(` ${firstName}`, { continued: true });
+
+        // Rest of name - different color (dark gray)
+        if (restName) {
+          doc
+            .font(HEADER_FONT)
+            .fontSize(14)
+            .fillColor("#374151")
+            .text(` ${restName}`);
+        } else {
+          doc.text(''); // New line if no rest name
         }
 
-        doc
-          .font('Helvetica-Bold')
-          .fontSize(12)
-          .fillColor('#0f172a')
-          .text(`${index + 1}. ${player.name}`);
-        doc
-          .font('Helvetica')
-          .fontSize(11)
-          .fillColor('#475569')
-          .text(`Role: ${player.role || 'N/A'} • Category: ${player.category || 'N/A'}`);
-
+        // Price information (if requested)
         if (includePrices) {
-          const basePrice = formatCurrency(player.basePrice || 0);
-          const soldPrice = player.soldPrice
+          const basePrice = getPlayerBasePriceFromCategory(player, tournament);
+          const base = formatCurrency(basePrice);
+          const sold = player.soldPrice
             ? formatCurrency(player.soldPrice)
             : player.wasAuctioned
-            ? 'Unsold'
-            : 'Not auctioned yet';
+            ? "Unsold"
+            : "Not auctioned";
+
           doc
-            .font('Helvetica')
+            .font(NORMAL_FONT)
             .fontSize(10)
-            .fillColor('#64748b')
-            .text(`Base Price: ${basePrice} | Sold Price: ${soldPrice}`);
+            .fillColor("#64748b")
+            .text(`  Base: ${base} | Sold: ${sold}`, { indent: 20 });
         }
 
-        doc.moveDown(0.6);
+        doc.moveDown(0.4);
       });
     }
 
-    if (includePrices) {
-      const totalSpent = team.players.reduce(
-        (sum, player) => sum + (player.soldPrice || 0),
-        0
-      );
-      const totalRemaining = team.remainingAmount || 0;
-
-      doc.moveDown(1);
-      doc
-        .font('Helvetica-Bold')
-        .fontSize(14)
-        .fillColor('#0f172a')
-        .text('Financial Summary');
-      doc.moveDown(0.4);
-      doc
-        .font('Helvetica')
-        .fontSize(12)
-        .fillColor('#0f172a')
-        .text(`Total Auctioned Amount: ${formatCurrency(totalSpent)}`)
-        .text(`Remaining Balance: ${formatCurrency(totalRemaining)}`)
-        .text(`Initial Budget: ${formatCurrency(team.budget || 0)}`);
+    // FOOTER - App name and logo
+    const footerY = doc.page.height - 80;
+    const logoPath = path.resolve(__dirname, "..", "..", "frontend", "app", "icon.png");
+    
+    if (fs.existsSync(logoPath)) {
+      try {
+        doc.image(logoPath, doc.page.width / 2 - 30, footerY, { width: 60, height: 60 });
+      } catch (err) {
+        console.error("Error loading app logo:", err);
+      }
     }
+
+    doc
+      .font(HEADER_FONT)
+      .fontSize(16)
+      .fillColor("#0f172a")
+      .text("BiddingCrease", {
+        align: "center",
+        y: footerY + 70
+      });
 
     doc.end();
   } catch (error) {
-    console.error('Download team report error:', error);
+    console.error("Download team report error:", error);
     if (!res.headersSent) {
-      res.status(500).json({
-        success: false,
-        message: 'Error generating team report'
-      });
-    } else {
-      res.end();
-    }
+      res.status(500).json({ success: false, message: "Error generating team report" });
+    } else res.end();
   }
 };
+
+
 
 module.exports = {
   getAllTeams,
