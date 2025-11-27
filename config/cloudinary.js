@@ -52,7 +52,12 @@ const teamStorage = new CloudinaryStorage({
   },
 });
 
-const upload = multer({ storage: playerStorage });
+const upload = multer({
+  storage: playerStorage,
+  limits: {
+    fileSize: 2 * 1024 * 1024,
+  },
+});
 const uploadTournamentLogo = multer({ storage: tournamentStorage });
 const uploadTeamLogo = multer({ storage: teamStorage });
 

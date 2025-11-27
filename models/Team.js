@@ -30,8 +30,8 @@ const teamSchema = new mongoose.Schema({
     type: Number,
     default: function() {
       return this.budget;
-    },
-    min: 0
+    }
+    // Removed min: 0 to allow negative values
   },
   players: [{
     type: mongoose.Schema.Types.ObjectId,

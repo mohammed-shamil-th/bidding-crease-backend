@@ -22,7 +22,7 @@ const playerSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['Batter', 'Bowler', 'All-Rounder'],
+    enum: ['Batter', 'Bowler', 'All-Rounder', 'Wicket Keeper'],
     required: true
   },
   battingStyle: {
@@ -43,15 +43,9 @@ const playerSchema = new mongoose.Schema({
     ],
     default: null
   },
-  category: {
-    type: String,
-    enum: ['Icon', 'Regular'],
+  categoryId: {
+    type: mongoose.Schema.Types.ObjectId,
     required: true
-  },
-  basePrice: {
-    type: Number,
-    required: true,
-    min: 0
   },
   soldPrice: {
     type: Number,
@@ -71,6 +65,12 @@ const playerSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Tournament',
     required: true
+  },
+  note: {
+    type: String,
+    trim: true,
+    maxlength: 500,
+    default: ''
   }
 }, {
   timestamps: true
@@ -80,7 +80,7 @@ const playerSchema = new mongoose.Schema({
 playerSchema.index({ tournamentId: 1 });
 playerSchema.index({ soldTo: 1 });
 playerSchema.index({ soldPrice: 1 });
-playerSchema.index({ category: 1 });
+playerSchema.index({ categoryId: 1 });
 
 // Virtual to check if player is sold
 playerSchema.virtual('isSold').get(function() {
