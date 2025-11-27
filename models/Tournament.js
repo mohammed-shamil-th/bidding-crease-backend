@@ -1,7 +1,51 @@
 // Tournament Model
 const mongoose = require('mongoose');
 
-const tournamentSchema = new mongoose.Schema({
+const { Schema } = mongoose;
+
+const inviteSchema = new Schema({
+  label: {
+    type: String,
+    trim: true,
+    default: 'Player Invitation Link'
+  },
+  token: {
+    type: String,
+    required: true
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  usageCount: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  maxUses: {
+    type: Number,
+    min: 1
+  },
+  expiresAt: {
+    type: Date
+  },
+  createdBy: {
+    type: Schema.Types.ObjectId,
+    ref: 'Admin'
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  lastUsedAt: {
+    type: Date
+  },
+  deactivatedAt: {
+    type: Date
+  }
+}, { _id: true });
+
+const tournamentSchema = new Schema({
   name: {
     type: String,
     required: true,
@@ -106,6 +150,10 @@ const tournamentSchema = new mongoose.Schema({
       }
     }],
     default: []
+  },
+  playerInvites: {
+    type: [inviteSchema],
+    default: []
   }
 }, {
   timestamps: true
@@ -162,6 +210,7 @@ tournamentSchema.pre('save', function(next) {
 
 // Index for faster queries
 tournamentSchema.index({ status: 1 });
+tournamentSchema.index({ 'playerInvites.token': 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('Tournament', tournamentSchema);
 

@@ -1,4 +1,5 @@
 // Tournament Controller
+const crypto = require('crypto');
 const Tournament = require('../models/Tournament');
 const { isValidObjectId } = require('../utils/validators');
 
@@ -507,11 +508,233 @@ const deleteTournament = async (req, res) => {
   }
 };
 
+const sanitizeInvite = (invite) => {
+  if (!invite) return null;
+  return {
+    _id: invite._id,
+    label: invite.label,
+    token: invite.token,
+    isActive: invite.isActive,
+    usageCount: invite.usageCount,
+    maxUses: invite.maxUses,
+    expiresAt: invite.expiresAt,
+    lastUsedAt: invite.lastUsedAt,
+    deactivatedAt: invite.deactivatedAt,
+    createdAt: invite.createdAt,
+    createdBy: invite.createdBy
+  };
+};
+
+const createPlayerInvite = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { label, maxUses, expiresAt } = req.body;
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid tournament ID' });
+    }
+
+    const tournament = await Tournament.findById(id);
+    if (!tournament) {
+      return res.status(404).json({ success: false, message: 'Tournament not found' });
+    }
+
+    let token = crypto.randomBytes(20).toString('hex');
+    const existingTokens = new Set(tournament.playerInvites.map((invite) => invite.token));
+    while (existingTokens.has(token)) {
+      token = crypto.randomBytes(20).toString('hex');
+    }
+
+    const parsedMaxUses = maxUses !== undefined && maxUses !== null
+      ? Number(maxUses)
+      : null;
+
+    const invitePayload = {
+      label: label?.trim() || '',
+      token,
+      isActive: true,
+      usageCount: 0,
+      maxUses: Number.isFinite(parsedMaxUses) && parsedMaxUses > 0 ? parsedMaxUses : null,
+      expiresAt: expiresAt ? new Date(expiresAt) : null,
+      createdBy: req.adminId,
+      lastUsedAt: null,
+      deactivatedAt: null
+    };
+
+    tournament.playerInvites.push(invitePayload);
+    // Mark the playerInvites array as modified to ensure Mongoose saves the new invite
+    tournament.markModified('playerInvites');
+    await tournament.save();
+
+    return res.status(201).json({
+      success: true,
+      message: 'Invite link created',
+      data: sanitizeInvite(tournament.playerInvites[tournament.playerInvites.length - 1])
+    });
+  } catch (error) {
+    console.error('Create invite error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Error creating invite link',
+      error: error.message 
+    });
+  }
+};
+
+const listPlayerInvites = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid tournament ID' });
+    }
+
+    const tournament = await Tournament.findById(id).select('name playerInvites');
+    if (!tournament) {
+      return res.status(404).json({ success: false, message: 'Tournament not found' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: tournament.playerInvites.map(sanitizeInvite)
+    });
+  } catch (error) {
+    console.error('List invites error:', error);
+    return res.status(500).json({ success: false, message: 'Error fetching invites' });
+  }
+};
+
+const togglePlayerInvite = async (req, res) => {
+  try {
+    const { id, inviteId } = req.params;
+
+    if (!isValidObjectId(id) || !isValidObjectId(inviteId)) {
+      return res.status(400).json({ success: false, message: 'Invalid IDs provided' });
+    }
+
+    const tournament = await Tournament.findById(id);
+    if (!tournament) {
+      return res.status(404).json({ success: false, message: 'Tournament not found' });
+    }
+
+    const invite = tournament.playerInvites.id(inviteId);
+    if (!invite) {
+      return res.status(404).json({ success: false, message: 'Invite not found' });
+    }
+
+    invite.isActive = !invite.isActive;
+    invite.deactivatedAt = invite.isActive ? null : new Date();
+    
+    // Mark the playerInvites array as modified to ensure Mongoose saves the subdocument changes
+    tournament.markModified('playerInvites');
+    await tournament.save();
+
+    return res.status(200).json({
+      success: true,
+      message: `Invite ${invite.isActive ? 'activated' : 'deactivated'}`,
+      data: sanitizeInvite(invite)
+    });
+  } catch (error) {
+    console.error('Toggle invite error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Error updating invite',
+      error: error.message 
+    });
+  }
+};
+
+const deletePlayerInvite = async (req, res) => {
+  try {
+    const { id, inviteId } = req.params;
+
+    if (!isValidObjectId(id) || !isValidObjectId(inviteId)) {
+      return res.status(400).json({ success: false, message: 'Invalid IDs provided' });
+    }
+
+    const tournament = await Tournament.findById(id);
+    if (!tournament) {
+      return res.status(404).json({ success: false, message: 'Tournament not found' });
+    }
+
+    const invite = tournament.playerInvites.id(inviteId);
+    if (!invite) {
+      return res.status(404).json({ success: false, message: 'Invite not found' });
+    }
+
+    // Remove the invite from the array using pull() method
+    tournament.playerInvites.pull(inviteId);
+    // Mark the playerInvites array as modified to ensure Mongoose saves the removal
+    tournament.markModified('playerInvites');
+    await tournament.save();
+
+    return res.status(200).json({ success: true, message: 'Invite deleted' });
+  } catch (error) {
+    console.error('Delete invite error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Error deleting invite',
+      error: error.message 
+    });
+  }
+};
+
+const getInviteByToken = async (req, res) => {
+  try {
+    const { token } = req.params;
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Token is required' });
+    }
+
+    const tournament = await Tournament.findOne({ 'playerInvites.token': token }).select('name logo location categories playerInvites status');
+
+    if (!tournament) {
+      return res.status(404).json({ success: false, message: 'Invite not found' });
+    }
+
+    const invite = tournament.playerInvites.find((inv) => inv.token === token);
+    if (!invite || !invite.isActive) {
+      return res.status(410).json({ success: false, message: 'Invite is inactive' });
+    }
+
+    if (invite.expiresAt && invite.expiresAt < new Date()) {
+      return res.status(410).json({ success: false, message: 'Invite has expired' });
+    }
+
+    if (invite.maxUses && invite.usageCount >= invite.maxUses) {
+      return res.status(410).json({ success: false, message: 'Invite usage limit reached' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        tournament: {
+          _id: tournament._id,
+          name: tournament.name,
+          logo: tournament.logo,
+          location: tournament.location,
+          status: tournament.status,
+          categories: tournament.categories
+        },
+        invite: sanitizeInvite(invite)
+      }
+    });
+  } catch (error) {
+    console.error('Get invite error:', error);
+    return res.status(500).json({ success: false, message: 'Error fetching invite' });
+  }
+};
+
 module.exports = {
   getAllTournaments,
   getTournament,
   createTournament,
   updateTournament,
-  deleteTournament
+  deleteTournament,
+  createPlayerInvite,
+  listPlayerInvites,
+  togglePlayerInvite,
+  deletePlayerInvite,
+  getInviteByToken
 };
 

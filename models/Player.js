@@ -22,7 +22,7 @@ const playerSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['Batter', 'Bowler', 'All-Rounder'],
+    enum: ['Batter', 'Bowler', 'All-Rounder', 'Wicket Keeper'],
     required: true
   },
   battingStyle: {
@@ -65,6 +65,12 @@ const playerSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Tournament',
     required: true
+  },
+  note: {
+    type: String,
+    trim: true,
+    maxlength: 500,
+    default: ''
   }
 }, {
   timestamps: true

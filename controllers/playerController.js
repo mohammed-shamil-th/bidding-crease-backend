@@ -4,6 +4,22 @@ const Team = require('../models/Team');
 const Tournament = require('../models/Tournament');
 const { isValidObjectId, isValidMobile } = require('../utils/validators');
 
+const validateInviteAvailability = (invite) => {
+  if (!invite) {
+    return { valid: false, message: 'Invite not found' };
+  }
+  if (!invite.isActive) {
+    return { valid: false, message: 'Invite is inactive' };
+  }
+  if (invite.expiresAt && invite.expiresAt < new Date()) {
+    return { valid: false, message: 'Invite has expired' };
+  }
+  if (invite.maxUses && invite.usageCount >= invite.maxUses) {
+    return { valid: false, message: 'Invite usage limit reached' };
+  }
+  return { valid: true };
+};
+
 // Get all players
 const getAllPlayers = async (req, res) => {
   try {
@@ -242,6 +258,7 @@ const createPlayer = async (req, res) => {
       bowlingStyle,
       categoryId,
       tournamentId,
+      note
     } = req.body;
 
     // Validate required fields
@@ -274,10 +291,10 @@ const createPlayer = async (req, res) => {
     }
 
     // Validate role
-    if (!['Batter', 'Bowler', 'All-Rounder'].includes(role)) {
+    if (!['Batter', 'Bowler', 'All-Rounder', 'Wicket Keeper'].includes(role)) {
       return res.status(400).json({
         success: false,
-        message: 'Role must be "Batter", "Bowler", or "All-Rounder"',
+        message: 'Role must be "Batter", "Bowler", "All-Rounder", or "Wicket Keeper"',
       });
     }
 
@@ -305,6 +322,15 @@ const createPlayer = async (req, res) => {
       });
     }
 
+    const sanitizedNote = typeof note === 'string' ? note.trim() : '';
+
+    if (sanitizedNote.length > 500) {
+      return res.status(400).json({
+        success: false,
+        message: 'Note must be 500 characters or fewer',
+      });
+    }
+
     // Get image URL from Cloudinary upload (if uploaded)
     const image = req.file ? req.file.path : '';
 
@@ -328,6 +354,7 @@ const createPlayer = async (req, res) => {
       bowlingStyle: bowlingStyle || null,
       categoryId: resolvedCategory._id,
       tournamentId,
+      note: sanitizedNote,
     });
 
     await player.save();
@@ -342,6 +369,147 @@ const createPlayer = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error creating player',
+      error: error.message,
+    });
+  }
+};
+
+const createPlayerPublic = async (req, res) => {
+  try {
+    const { token } = req.params;
+    const {
+      name,
+      mobile,
+      location,
+      role,
+      battingStyle,
+      bowlingStyle,
+      categoryId,
+      note,
+    } = req.body;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invite token is required',
+      });
+    }
+
+    if (!name || !mobile || !role || !categoryId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide all required fields',
+      });
+    }
+
+    if (!isValidMobile(mobile)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid mobile number',
+      });
+    }
+
+    if (!['Batter', 'Bowler', 'All-Rounder', 'Wicket Keeper'].includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Role must be "Batter", "Bowler", "All-Rounder", or "Wicket Keeper"',
+      });
+    }
+
+    const tournament = await Tournament.findOne({ 'playerInvites.token': token });
+    if (!tournament) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invite not found',
+      });
+    }
+
+    const invite = tournament.playerInvites.find((inv) => inv.token === token);
+    const inviteValidation = validateInviteAvailability(invite);
+    if (!inviteValidation.valid) {
+      return res.status(410).json({
+        success: false,
+        message: inviteValidation.message,
+      });
+    }
+
+    if (!Array.isArray(tournament.categories) || tournament.categories.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tournament has no categories configured',
+      });
+    }
+
+    if (!isValidObjectId(categoryId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid category ID',
+      });
+    }
+
+    const resolvedCategory = tournament.categories.id(categoryId);
+    if (!resolvedCategory) {
+      return res.status(400).json({
+        success: false,
+        message: 'Category is not valid for this tournament',
+      });
+    }
+
+    const sanitizedNote = typeof note === 'string' ? note.trim() : '';
+    if (sanitizedNote.length > 500) {
+      return res.status(400).json({
+        success: false,
+        message: 'Note must be 500 characters or fewer',
+      });
+    }
+
+    const image = req.file ? req.file.path : '';
+
+    const capitalizeWords = (str) => {
+      if (!str) return str;
+      return str
+        .trim()
+        .split(/\s+/)
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+    };
+
+    const player = new Player({
+      image,
+      name: capitalizeWords(name),
+      mobile,
+      location,
+      role,
+      battingStyle: battingStyle || null,
+      bowlingStyle: bowlingStyle || null,
+      categoryId: resolvedCategory._id,
+      tournamentId: tournament._id,
+      note: sanitizedNote,
+    });
+
+    await player.save();
+    invite.usageCount += 1;
+    invite.lastUsedAt = new Date();
+
+    if (invite.maxUses && invite.usageCount >= invite.maxUses) {
+      invite.isActive = false;
+      invite.deactivatedAt = new Date();
+    }
+
+    // Mark the playerInvites array as modified to ensure Mongoose saves the subdocument changes
+    tournament.markModified('playerInvites');
+    await tournament.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Player submitted successfully',
+      data: player,
+    });
+  } catch (error) {
+    console.error('Public player create error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error submitting player',
       error: error.message,
     });
   }
@@ -379,6 +547,7 @@ const updatePlayer = async (req, res) => {
       tournamentId,
       soldPrice,
       soldTo,
+      note
     } = req.body;
 
     // Update basic player fields
@@ -409,10 +578,10 @@ const updatePlayer = async (req, res) => {
     }
 
     if (role !== undefined) {
-      if (role && !['Batter', 'Bowler', 'All-Rounder'].includes(role)) {
+      if (role && !['Batter', 'Bowler', 'All-Rounder', 'Wicket Keeper'].includes(role)) {
         return res.status(400).json({
           success: false,
-          message: 'Role must be "Batter", "Bowler", or "All-Rounder"',
+          message: 'Role must be "Batter", "Bowler", "All-Rounder", or "Wicket Keeper"',
         });
       }
       player.role = role;
@@ -516,6 +685,16 @@ const updatePlayer = async (req, res) => {
     if (req.file) {
       player.image = req.file.path;
     }
+    if (note !== undefined) {
+      if (typeof note === 'string' && note.trim().length > 500) {
+        return res.status(400).json({
+          success: false,
+          message: 'Note must be 500 characters or fewer',
+        });
+      }
+      player.note = typeof note === 'string' ? note.trim() : '';
+    }
+
 
     // Save player first
     await player.save();
@@ -713,11 +892,11 @@ const bulkCreatePlayers = async (req, res) => {
         }
 
         // Validate role if provided
-        if (playerData.role && !['Batter', 'Bowler', 'All-Rounder'].includes(playerData.role)) {
+        if (playerData.role && !['Batter', 'Bowler', 'All-Rounder', 'Wicket Keeper'].includes(playerData.role)) {
           errors.push({
             index: i,
             name: playerData.name,
-            error: 'Role must be "Batter", "Bowler", or "All-Rounder"',
+            error: 'Role must be "Batter", "Bowler", "All-Rounder", or "Wicket Keeper"',
           });
           continue;
         }
@@ -763,6 +942,10 @@ const bulkCreatePlayers = async (req, res) => {
           categoryId: resolvedCategory._id,
           tournamentId,
           wasAuctioned: false,
+          note:
+            typeof playerData.note === 'string'
+              ? playerData.note.trim().slice(0, 500)
+              : '',
         });
 
         await player.save();
@@ -805,6 +988,7 @@ module.exports = {
   getAllPlayers,
   getPlayer,
   createPlayer,
+  createPlayerPublic,
   updatePlayer,
   deletePlayer,
   bulkCreatePlayers,
