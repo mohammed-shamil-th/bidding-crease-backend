@@ -3,6 +3,7 @@ const Player = require('../models/Player');
 const Team = require('../models/Team');
 const Tournament = require('../models/Tournament');
 const { isValidObjectId, isValidMobile } = require('../utils/validators');
+const ExcelJS = require('exceljs');
 
 const validateInviteAvailability = (invite) => {
   if (!invite) {
@@ -984,6 +985,232 @@ const bulkCreatePlayers = async (req, res) => {
   }
 };
 
+// Export players to Excel
+const exportPlayersToExcel = async (req, res) => {
+  try {
+    const {
+      tournamentId,
+      sold,
+      unsold,
+      category,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+      wasAuctioned,
+    } = req.query;
+
+    const query = {};
+
+    if (tournamentId) {
+      if (!isValidObjectId(tournamentId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid tournament ID',
+        });
+      }
+      query.tournamentId = tournamentId;
+    }
+
+    // Filter by wasAuctioned status
+    if (wasAuctioned === 'true') {
+      query.wasAuctioned = true;
+    } else if (wasAuctioned === 'false') {
+      query.wasAuctioned = false;
+    }
+
+    // Filter by sold/unsold status
+    if (sold === 'true') {
+      query.soldPrice = { $ne: null };
+      query.soldTo = { $ne: null };
+    } else if (unsold === 'true') {
+      query.$or = [{ soldPrice: null }, { soldTo: null }];
+    }
+
+    // Filter by category name via categoryId resolved from tournament categories
+    if (category) {
+      const categoryName = String(category).trim();
+
+      if (categoryName) {
+        let categoryIds = [];
+
+        if (tournamentId) {
+          // Single tournament: resolve category IDs from this tournament only
+          const tournament = await Tournament.findById(tournamentId).select('categories');
+          if (!tournament) {
+            return res.status(404).json({
+              success: false,
+              message: 'Tournament not found',
+            });
+          }
+
+          if (Array.isArray(tournament.categories) && tournament.categories.length > 0) {
+            categoryIds = tournament.categories
+              .filter(
+                (cat) =>
+                  cat.name && cat.name.toLowerCase() === categoryName.toLowerCase(),
+              )
+              .map((cat) => cat._id);
+          }
+        } else {
+          // All tournaments: find any categories matching this name
+          const tournaments = await Tournament.find({
+            'categories.name': { $regex: new RegExp(`^${categoryName}$`, 'i') },
+          }).select('categories');
+
+          tournaments.forEach((t) => {
+            if (Array.isArray(t.categories)) {
+              t.categories.forEach((cat) => {
+                if (
+                  cat.name &&
+                  cat.name.toLowerCase() === categoryName.toLowerCase()
+                ) {
+                  categoryIds.push(cat._id);
+                }
+              });
+            }
+          });
+        }
+
+        if (!categoryIds.length) {
+          // No matching category IDs -> no players
+          return res.status(200).json({
+            success: true,
+            message: 'No players found for the selected filters',
+            data: [],
+          });
+        }
+
+        query.categoryId = { $in: categoryIds };
+      }
+    }
+
+    // Sort options
+    const sortOptions = {};
+    if (sortBy === 'name') {
+      sortOptions.name = sortOrder === 'asc' ? 1 : -1;
+    } else if (sortBy === 'updatedAt') {
+      sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
+    } else {
+      sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
+    }
+
+    // Fetch all players matching the query (no pagination)
+    const players = await Player.find(query)
+      .populate('soldTo', 'name')
+      .populate('tournamentId', 'name categories')
+      .sort(sortOptions);
+
+    // Get tournament for filename if filtered
+    let tournamentName = '';
+    if (tournamentId) {
+      const tournament = await Tournament.findById(tournamentId).select('name');
+      if (tournament) {
+        tournamentName = tournament.name;
+      }
+    }
+
+    // Derive category name from tournament categories using categoryId
+    const mappedPlayers = players.map((doc) => {
+      const player = doc.toObject();
+
+      if (
+        player.categoryId &&
+        player.tournamentId &&
+        Array.isArray(player.tournamentId.categories)
+      ) {
+        const matchedCategory = player.tournamentId.categories.find(
+          (cat) =>
+            cat._id &&
+            cat._id.toString() === player.categoryId.toString(),
+        );
+
+        if (matchedCategory && matchedCategory.name) {
+          player.category = matchedCategory.name;
+          player.basePrice = matchedCategory.basePrice || 0;
+        }
+      }
+
+      return player;
+    });
+
+    // Create Excel workbook
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Players');
+
+    // Define columns
+    worksheet.columns = [
+      { header: 'Name', key: 'name', width: 25 },
+      { header: 'Mobile', key: 'mobile', width: 15 },
+      { header: 'Category', key: 'category', width: 15 },
+      { header: 'Location', key: 'location', width: 20 },
+      { header: 'Notes', key: 'notes', width: 40 },
+      { header: 'Base Price', key: 'basePrice', width: 15 },
+      { header: 'Sold Price', key: 'soldPrice', width: 15 },
+      { header: 'Team', key: 'team', width: 25 },
+    ];
+
+    // Style header row
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE0E0E0' },
+    };
+
+    // Add data rows
+    mappedPlayers.forEach((player) => {
+      worksheet.addRow({
+        name: player.name || '',
+        mobile: player.mobile || '',
+        category: player.category || '',
+        location: player.location || '',
+        notes: player.note || '',
+        basePrice: player.basePrice || 0,
+        soldPrice: player.soldPrice || '',
+        team: player.soldTo?.name || '',
+      });
+    });
+
+    // Format currency columns
+    const basePriceColumn = worksheet.getColumn('basePrice');
+    const soldPriceColumn = worksheet.getColumn('soldPrice');
+    
+    basePriceColumn.numFmt = '#,##0';
+    soldPriceColumn.numFmt = '#,##0';
+
+    // Generate filename
+    let fileName = 'players-export';
+    if (tournamentName) {
+      fileName = `players-${tournamentName.replace(/\s+/g, '-').toLowerCase()}`;
+    }
+    fileName += '.xlsx';
+
+    // Set response headers
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${fileName}"`
+    );
+
+    // Write to response
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error('Export players to Excel error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: 'Error exporting players to Excel',
+        error: error.message,
+      });
+    } else {
+      res.end();
+    }
+  }
+};
+
 module.exports = {
   getAllPlayers,
   getPlayer,
@@ -992,4 +1219,5 @@ module.exports = {
   updatePlayer,
   deletePlayer,
   bulkCreatePlayers,
+  exportPlayersToExcel,
 };

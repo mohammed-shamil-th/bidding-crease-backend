@@ -8,7 +8,8 @@ const {
   createPlayerPublic,
   updatePlayer,
   deletePlayer,
-  bulkCreatePlayers
+  bulkCreatePlayers,
+  exportPlayersToExcel
 } = require('../controllers/playerController');
 const { authenticateAdmin } = require('../middleware/auth');
 const upload = require('../middleware/upload');
@@ -33,6 +34,7 @@ const handlePlayerUpload = (req, res, next) => {
 
 // Public routes
 router.get('/', getAllPlayers);
+router.get('/export/excel', exportPlayersToExcel);
 router.get('/:id', getPlayer);
 router.post('/public/:token', handlePlayerUpload, createPlayerPublic);
 
