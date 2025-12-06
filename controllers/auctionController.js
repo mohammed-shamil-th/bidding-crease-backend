@@ -51,20 +51,35 @@ const getCurrentAuction = async (req, res) => {
       const playerDoc = await Player.findById(currentAuctionState.currentPlayerId)
         .populate('soldTo', 'name logo');
       
+      if (!playerDoc) {
+        return res.status(200).json({
+          success: true,
+          data: {
+            ...currentAuctionState,
+            currentPlayer: null
+          }
+        });
+      }
+
+      // Convert to object first
+      currentPlayer = playerDoc.toObject();
+      
       // Get tournament to access category information
       const tournament = await Tournament.findById(tournamentId);
-      if (tournament && tournament.categories && playerDoc && playerDoc.categoryId) {
+      if (tournament && Array.isArray(tournament.categories) && playerDoc.categoryId) {
         const category = tournament.categories.id(playerDoc.categoryId);
         if (category) {
-          currentPlayer = playerDoc.toObject();
+          // Add category information to player object
           currentPlayer.categoryId = category._id.toString();
           currentPlayer.category = category.name;
-          currentPlayer.basePrice = category.basePrice;
+          currentPlayer.basePrice = category.basePrice || 0;
         } else {
-          currentPlayer = playerDoc;
+          // Category not found, but still set basePrice to 0
+          currentPlayer.basePrice = 0;
         }
       } else {
-        currentPlayer = playerDoc;
+        // Tournament or categories not found, set basePrice to 0
+        currentPlayer.basePrice = 0;
       }
     }
 
